@@ -116,14 +116,3 @@ flowchart TD
 **Scene Runtime** — `AppManager.js` is the single class that owns the actual PlayCanvas `Application` instance. Everything that needs per-frame engine access lives here: the entity map, position/rotation/scale setters, camera modes (orbit, standing-inside, walk/run), and GLB loading. `App.jsx` talks to it only through its public methods (`loadGlbAsset`, `setEntityPosition`, `enterVR`, etc.) and its two callbacks (`onSelectionChange`, `onTransformChange`) — nothing outside `AppManager.js` touches a `pc.Entity` directly.
 
 **Data layer** — `AssetLibrary.js` is a static list of built-in environments/objects (no network request, no loading state). Anything dragged in from outside that list — an uploaded `.glb`/`.gltf` file or a pasted URL — goes through the same `loadGlbAsset` path as a catalog item, so custom and built-in models behave identically once they're in the scene.
-
-### Why it's split this way
-
-- **The engine never imports React, and React never imports PlayCanvas types.** `AppManager.js` is plain JS with no React dependency, so it could be dropped into a non-React shell later without changes. All communication crosses through plain callbacks and plain data (arrays of numbers for position/rotation, not `pc.Vec3` instances).
-- **`App.jsx` is the only component that holds an engine reference.** Every other component gets pre-bound callbacks, never the raw `AppManager` instance — that keeps the "what can touch the 3D scene" surface to one file.
-- **Everything that needs a per-frame update lives in `AppManager.js`.** Camera movement, drag-to-place, and selection outlines all hook into PlayCanvas's own `update` event rather than a React render loop, since a React re-render is the wrong trigger for animating a camera 60 times a second.
-
-### Known gaps worth flagging in the report
-
-- `ModelImporter.jsx` looks superseded by `AssetLibraryPanel.jsx`'s built-in upload form — worth confirming it's unused and removing it, so the "Editor UI" diagram doesn't drift from the actual code.
-- Character movement (walk/run) covers translation only; there's no collision or ground-following yet, so it's possible to walk through placed objects or off the edge of an environment's mesh.
