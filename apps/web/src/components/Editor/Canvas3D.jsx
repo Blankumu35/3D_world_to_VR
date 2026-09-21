@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { AppManager } from '../../playcanvas/AppManager';
 import { ASSET_DRAG_MIME } from './AssetLibraryPanel';
 
-export function Canvas3D({ onEngineReady, onSelectionChange, onTransformChange, onDropAsset }) {
+export function Canvas3D({ onEngineReady, onSelectionChange, onTransformChange, onDropAsset, onPlayerChange }) {
   const canvasRef = useRef(null);
   const managerRef = useRef(null);
 
@@ -11,16 +11,19 @@ export function Canvas3D({ onEngineReady, onSelectionChange, onTransformChange, 
   const selectionCb = useRef(onSelectionChange);
   const transformCb = useRef(onTransformChange);
   const dropCb = useRef(onDropAsset);
+  const playerCb = useRef(onPlayerChange);
   selectionCb.current = onSelectionChange;
   transformCb.current = onTransformChange;
   dropCb.current = onDropAsset;
+  playerCb.current = onPlayerChange;
 
   useEffect(() => {
     if (!canvasRef.current) return;
 
     const manager = new AppManager(canvasRef.current, {
       onSelectionChange: (sel) => selectionCb.current?.(sel),
-      onTransformChange: (t) => transformCb.current?.(t)
+      onTransformChange: (t) => transformCb.current?.(t),
+      onPlayerChange: (id) => playerCb.current?.(id)
     });
     managerRef.current = manager;
 

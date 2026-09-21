@@ -2,11 +2,21 @@ import React, { useState, useRef, useCallback } from 'react';
 import { Canvas3D } from './components/Editor/Canvas3D';
 import { AssetLibraryPanel } from './components/Editor/AssetLibraryPanel';
 import { TransformPanel } from './components/Editor/TransformPanel';
+import { CharacterControls } from './components/Controls/CharacterControls';
+import { PlayerModePanel } from './components/Controls/PlayerModePanel';
 
 export function App() {
   const engineRef = useRef(null);
   const [isImporting, setIsImporting] = useState(false);
   const [selection, setSelection] = useState(null);
+
+  // Objects (not environments) that exist right now, for the "choose your
+  // player" dropdown — kept in React state rather than re-querying the
+  // engine each render, since AppManager doesn't emit a general "entities
+  // changed" event.
+  const [placedObjects, setPlacedObjects] = useState([]); // [{ id, name }]
+  const [playerEntityId, setPlayerEntityId] = useState(null);
+  const [playerView, setPlayerView] = useState('third-person');
 
   const handleEngineReady = useCallback((engineInstance) => {
     engineRef.current = engineInstance;
@@ -20,6 +30,14 @@ export function App() {
   // Fired while dragging or rotating, so the panel stays in sync
   const handleTransformChange = useCallback((transform) => {
     setSelection((prev) => (prev && prev.id === transform.id ? transform : prev));
+  }, []);
+
+  // Fired by AppManager whenever the active player changes — including from
+  // under us, e.g. focusOn() or removeEntity() stepping out of player mode
+  // on their own. This is the single source of truth for playerEntityId;
+  // the panel's own actions (below) don't set it directly.
+  const handlePlayerChange = useCallback((id) => {
+    setPlayerEntityId(id);
   }, []);
 
   // Turns a canvas-relative screen point into a world-space drop position by
@@ -55,18 +73,21 @@ export function App() {
 
       // Environments skip the "shrink to ~1.5 units" normalisation a small
       // placed object gets (targetSize: 0 keeps the model's authored scale)
-      // and don't grab the selection/transform panel on load.
+      // and don't grab the selection/transform panel on load. `name`/`type`
+      // are stored on the entity so the player picker can list it.
       const loadOptions = isEnvironment
-        ? { targetSize: 0, autoSelect: false }
-        : {};
+        ? { targetSize: 0, autoSelect: false, name, type: 'environment' }
+        : { name, type: 'object' };
 
       await engineRef.current.loadGlbAsset(assetId, source, position, loadOptions);
 
-      // Move the viewpoint to stand at the centre of a newly-added
-      // environment, looking around from inside it rather than at it from
-      // outside. Placed objects don't move the camera.
       if (isEnvironment) {
+        // Move the viewpoint to stand at the centre of a newly-added
+        // environment, looking around from inside it rather than at it
+        // from outside. Placed objects don't move the camera.
         engineRef.current.viewFromCenter(assetId);
+      } else {
+        setPlacedObjects((prev) => [...prev, { id: assetId, name }]);
       }
 
       console.log(`Successfully added ${type}: ${name}`);
@@ -82,6 +103,19 @@ export function App() {
   const handleDropAsset = (asset, screenPos) => {
     handleAddAsset(asset, screenPos);
   };
+
+  // Character movement isn't tied to the current selection — it reads/writes
+  // the camera's own "standing" position — so it doesn't go through
+  // withSelection below. useCallback with an empty dependency array keeps
+  // this stable across renders, which matters here: useKeyboardMovement only
+  // attaches its window key listeners once, on mount, and closes over
+  // whatever onMoveInputChange was passed in at that time. A function that
+  // changed identity every render would still *work* (engineRef.current is
+  // read at call time, not closed over early) but would be a needless prop
+  // change on every App render, so it's kept stable regardless.
+  const handleMoveInputChange = useCallback((input) => {
+    engineRef.current?.setMoveInput(input);
+  }, []);
 
   const withSelection = (fn) => (...args) => {
     if (!engineRef.current || !selection) return;
@@ -105,9 +139,25 @@ export function App() {
   const handleFocus = withSelection((engine, id) => engine.focusOn(id));
 
   const handleDelete = withSelection((engine, id) => {
-    engine.removeEntity(id);
+    engine.removeEntity(id); // also exits player mode if `id` was the player
     setSelection(null);
+    setPlacedObjects((prev) => prev.filter((o) => o.id !== id));
   });
+
+  // ---- Active player controls (see components/Controls/PlayerModePanel) ----
+
+  const handleSelectPlayer = (id) => {
+    engineRef.current?.setActivePlayer(id);
+  };
+
+  const handleExitPlayerMode = () => {
+    engineRef.current?.clearActivePlayer();
+  };
+
+  const handleChangeViewMode = (mode) => {
+    engineRef.current?.setPlayerView(mode);
+    setPlayerView(mode);
+  };
 
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -116,8 +166,18 @@ export function App() {
         onSelectionChange={handleSelectionChange}
         onTransformChange={handleTransformChange}
         onDropAsset={handleDropAsset}
+        onPlayerChange={handlePlayerChange}
       />
       <AssetLibraryPanel onAddAsset={handleAddAsset} isImporting={isImporting} />
+      <CharacterControls onMoveInputChange={handleMoveInputChange} />
+      <PlayerModePanel
+        objects={placedObjects}
+        playerEntityId={playerEntityId}
+        viewMode={playerView}
+        onSelectPlayer={handleSelectPlayer}
+        onExitPlayerMode={handleExitPlayerMode}
+        onChangeViewMode={handleChangeViewMode}
+      />
       <TransformPanel
         selection={selection}
         onPositionChange={handlePositionChange}

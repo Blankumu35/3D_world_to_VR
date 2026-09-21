@@ -46,6 +46,13 @@ export class AppManager {
 
     this.onSelectionChange = callbacks.onSelectionChange || null;
     this.onTransformChange = callbacks.onTransformChange || null;
+    this.onPlayerChange = callbacks.onPlayerChange || null;
+
+    // "Active player": character movement (below) drives this entity
+    // instead of the free-look camera. playerView controls how the camera
+    // relates to it — see setPlayerView / updateCamera.
+    this.activePlayerId = null;
+    this.playerView = 'third-person'; // 'normal' | 'third-person' | 'first-person'
 
     this.orbit = { yaw: 25, pitch: -20, dist: 8 };
     this.orbitTarget = new pc.Vec3(0, 1, 0);
@@ -54,7 +61,22 @@ export class AppManager {
     // a just-added environment) instead of orbiting around orbitTarget from
     // a distance — see updateCamera(). Mouse-drag still steers yaw/pitch as
     // normal, so it behaves like looking around from where you're standing.
+    // Character movement (below) walks this same point around, so standing
+    // still and walking use one shared position rather than two.
     this.insideTarget = null;
+
+    // Character movement: WASD/arrow-key state is written by the Controls
+    // component via setMoveInput(); stepCharacterMovement() reads it once
+    // per frame. Speeds are in world units/second.
+    this.walkSpeed = 3;
+    this.runSpeed = 7;
+    this.moveInput = {
+      forward: false,
+      backward: false,
+      left: false,
+      right: false,
+      running: false
+    };
 
     this.pointer = {
       down: false,
@@ -120,7 +142,10 @@ export class AppManager {
 
     this.attachPointerHandlers();
 
-    this.updateHandler = () => this.drawSelectionOutline();
+    this.updateHandler = (dt) => {
+      this.stepCharacterMovement(dt);
+      this.drawSelectionOutline();
+    };
     this.app.on('update', this.updateHandler);
 
     this.app.start();
@@ -136,12 +161,45 @@ export class AppManager {
     const yaw = this.orbit.yaw * pc.math.DEG_TO_RAD;
 
     // Offset from a look-at target to the camera, for the given yaw/pitch —
-    // used two different ways below depending on mode.
+    // used a few different ways below depending on mode.
     const dir = new pc.Vec3(
       Math.cos(pitch) * Math.sin(yaw),
       -Math.sin(pitch),
       Math.cos(pitch) * Math.cos(yaw)
     );
+
+    const playerRecord = this.activePlayerId && this.entities.get(this.activePlayerId);
+
+    if (playerRecord && this.playerView !== 'normal') {
+      // Following the active player: first/third person both track its
+      // world position every frame, not just when it moves, since the
+      // object itself might get dragged/rotated/rescaled via TransformPanel
+      // while it's the active player too.
+      const box = this.getWorldAabb(playerRecord.entity);
+      const pos = playerRecord.entity.getPosition();
+      const cx = box ? box.center.x : pos.x;
+      const cz = box ? box.center.z : pos.z;
+      const base = box ? box.center.y - box.halfExtents.y : pos.y;
+      const height = box ? box.halfExtents.y * 2 : 1.6;
+
+      if (this.playerView === 'first-person') {
+        // Eye near the top of the object, looking out through it.
+        const eyeY = base + height * 0.9;
+        this.camera.setPosition(cx, eyeY, cz);
+        this.camera.lookAt(cx - dir.x, eyeY - dir.y, cz - dir.z);
+        return;
+      }
+
+      // 'third-person': a chase camera at the usual orbit distance/angle,
+      // just centred on the player instead of a fixed orbitTarget. Reuses
+      // orbit.dist, so the scroll-wheel zoom still works as "follow
+      // distance".
+      const targetY = base + height * 0.5;
+      const d = this.orbit.dist;
+      this.camera.setPosition(cx + d * dir.x, targetY + d * dir.y, cz + d * dir.z);
+      this.camera.lookAt(cx, targetY, cz);
+      return;
+    }
 
     if (this.insideTarget) {
       // "Standing inside" mode: the eye sits AT insideTarget and yaw/pitch
@@ -186,6 +244,12 @@ export class AppManager {
     if (!box) return;
 
     this.insideTarget = null; // framing an object is an "outside" view
+    if (this.activePlayerId) {
+      // Framing something from outside doesn't make sense while embodying
+      // it as the active player — step out of player mode first.
+      this.activePlayerId = null;
+      this.onPlayerChange?.(null);
+    }
     this.orbitTarget.copy(box.center);
     const radius = box.halfExtents.length();
     this.orbit.dist = pc.math.clamp(radius * 3.2, 0.5, 200);
@@ -212,6 +276,126 @@ export class AppManager {
   exitInsideView() {
     if (!this.insideTarget) return;
     this.insideTarget = null;
+    this.updateCamera();
+  }
+
+  // ------------------------------------------------------------------
+  // Active player (embody a placed object)
+  //
+  // this.activePlayerId names the entity character movement drives (see
+  // stepCharacterMovement); this.playerView says how the camera relates to
+  // it — 'normal' leaves the camera alone (independent free-look/orbit,
+  // same as when there's no player), 'third-person' chases it,
+  // 'first-person' stands inside it. Both are read by updateCamera().
+  // ------------------------------------------------------------------
+
+  /** Objects (not environments) that can be picked as the active player. */
+  listPlayableEntities() {
+    return Array.from(this.entities.entries())
+      .filter(([, r]) => r.type !== 'environment')
+      .map(([id, r]) => ({ id, name: r.name || id }));
+  }
+
+  /**
+   * Makes `assetId` the active player: character movement now moves this
+   * object instead of the free-look camera. Camera behaviour depends on
+   * the current playerView (see setPlayerView).
+   */
+  setActivePlayer(assetId) {
+    if (!this.entities.has(assetId)) return false;
+    this.activePlayerId = assetId;
+    this.onPlayerChange?.(this.activePlayerId);
+    this.updateCamera();
+    return true;
+  }
+
+  /** Stop controlling any object; movement goes back to the free-look camera. */
+  clearActivePlayer() {
+    if (!this.activePlayerId) return;
+    // Keep the camera exactly where it ended up (e.g. mid-chase-cam)
+    // instead of snapping back to wherever the free-look camera was left
+    // before player mode started.
+    this.insideTarget = this.camera.getPosition().clone();
+    this.activePlayerId = null;
+    this.onPlayerChange?.(null);
+    this.updateCamera();
+  }
+
+  /** @param {'normal'|'first-person'|'third-person'} mode */
+  setPlayerView(mode) {
+    if (!['normal', 'first-person', 'third-person'].includes(mode)) return;
+    this.playerView = mode;
+    this.updateCamera();
+  }
+
+  // ------------------------------------------------------------------
+  // Character movement (walk / run)
+  // ------------------------------------------------------------------
+
+  /**
+   * Merges partial movement input, e.g. { forward: true }. Called by the
+   * Controls components on every keydown/keyup rather than once per frame —
+   * cheap object writes, no per-frame cost until stepCharacterMovement runs.
+   */
+  setMoveInput(partial) {
+    Object.assign(this.moveInput, partial);
+  }
+
+  /**
+   * Advances the "standing" position (or, with an active player set, that
+   * entity's position — see setActivePlayer) by one frame's worth of
+   * WASD/arrow-key input, called every engine tick. Movement is
+   * first-person: forward/back/strafe relative to the direction the camera
+   * is currently looking, on the horizontal plane only — pitch (looking up/
+   * down) is deliberately ignored for the movement direction so tilting the
+   * view doesn't make you fly.
+   *
+   * Pressing a movement key while still orbiting, with no active player and
+   * no insideTarget set yet, converts the current orbit view into a
+   * standing position at the camera's present location, so "walk" works
+   * immediately rather than requiring viewFromCenter() first.
+   */
+  stepCharacterMovement(dt) {
+    const input = this.moveInput;
+    const isMoving = input.forward || input.backward || input.left || input.right;
+    if (!isMoving) return;
+
+    const yaw = this.orbit.yaw * pc.math.DEG_TO_RAD;
+    // Same yaw convention as updateCamera()'s `dir`, but with pitch fixed at
+    // 0 (horizontal-only). `dir` there points from the look-at point back to
+    // the camera, so the direction you're actually facing is its negation.
+    const facing = new pc.Vec3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    // Right-hand "right" vector for a Y-up world: cross(facing, up).
+    const right = new pc.Vec3(-facing.z, 0, facing.x);
+
+    const move = new pc.Vec3();
+    if (input.forward) move.add(facing);
+    if (input.backward) move.sub(facing);
+    if (input.right) move.add(right);
+    if (input.left) move.sub(right);
+
+    if (move.lengthSq() === 0) return;
+
+    const speed = input.running ? this.runSpeed : this.walkSpeed;
+    move.normalize().mulScalar(speed * dt);
+
+    const playerRecord = this.activePlayerId && this.entities.get(this.activePlayerId);
+    if (playerRecord) {
+      // An active player is driven directly, keeping its current height
+      // (no flying/sinking) — camera-relative movement either way, same
+      // feel as free-look walking.
+      const p = playerRecord.entity.getPosition();
+      playerRecord.entity.setPosition(p.x + move.x, p.y, p.z + move.z);
+      this.emitTransform(this.activePlayerId);
+      this.updateCamera(); // re-centre the chase/first-person camera
+      return;
+    }
+
+    if (!this.insideTarget) {
+      const p = this.camera.getPosition();
+      this.insideTarget = new pc.Vec3(p.x, p.y, p.z);
+    }
+    this.insideTarget.add(move);
     this.updateCamera();
   }
 
@@ -497,6 +681,7 @@ export class AppManager {
     record.entity.destroy();
     this.entities.delete(assetId);
     if (this.selectedId === assetId) this.selectEntity(null);
+    if (this.activePlayerId === assetId) this.clearActivePlayer();
     return true;
   }
 
@@ -519,9 +704,13 @@ export class AppManager {
    *   active selection (and so appears in TransformPanel) immediately after
    *   loading. Usually wanted for a placed object, usually not for a
    *   just-dropped environment.
+   * @param {string} options.name - display name, used by the active-player
+   *   picker (listPlayableEntities). Defaults to assetId if not given.
+   * @param {string} options.type - 'object' | 'environment'. Environments
+   *   are excluded from the active-player picker.
    */
   loadGlbAsset(assetId, source, position = [0, 0, 0], options = {}) {
-    const { targetSize = 1.5, autoSelect = true } = options;
+    const { targetSize = 1.5, autoSelect = true, name = assetId, type = 'object' } = options;
     return new Promise((resolve, reject) => {
       if (!this.app) return reject(new Error('PlayCanvas application not ready'));
 
@@ -556,7 +745,9 @@ export class AppManager {
           entity,
           baseScale: 1,
           scaleLevel: 0,
-          rotation: [0, 0, 0]
+          rotation: [0, 0, 0],
+          name,
+          type
         });
 
         if (targetSize > 0) {
