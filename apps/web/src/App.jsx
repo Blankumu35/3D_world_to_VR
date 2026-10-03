@@ -2,8 +2,11 @@ import React, { useState, useRef, useCallback } from 'react';
 import { Canvas3D } from './components/Editor/Canvas3D';
 import { AssetLibraryPanel } from './components/Editor/AssetLibraryPanel';
 import { TransformPanel } from './components/Editor/TransformPanel';
+import { EnvironmentPanel } from './components/Editor/EnvironmentPanel';
+//import { InteractableControls } from './components/Editor/InteractableControls';
 import { CharacterControls } from './components/Controls/CharacterControls';
 import { PlayerModePanel } from './components/Controls/PlayerModePanel';
+//import { InteractionHint } from './components/Controls/InteractionHint';
 
 export function App() {
   const engineRef = useRef(null);
@@ -18,8 +21,21 @@ export function App() {
   const [playerEntityId, setPlayerEntityId] = useState(null);
   const [playerView, setPlayerView] = useState('third-person');
 
+  // Interaction HUD: `interactionPrompt` mirrors AppManager's nearest
+  // in-range interactable ({ id, label } | null); `interactionMessage` is a
+  // brief "you did the thing" toast shown after E is actually pressed (see
+  // the default onInteract wired up in handleSetInteractable below).
+  const [interactionPrompt, setInteractionPrompt] = useState(null);
+  const [interactionMessage, setInteractionMessage] = useState(null);
+  const interactionMessageTimeoutRef = useRef(null);
+
   const handleEngineReady = useCallback((engineInstance) => {
     engineRef.current = engineInstance;
+    // setInteractionPromptHandler is a plain setter on AppManager rather
+    // than one of Canvas3D's constructor-time callbacks (onSelectionChange
+    // etc.) — wiring it here, right where engineRef itself is captured,
+    // means Canvas3D never needs to know this feature exists.
+    engineInstance.setInteractionPromptHandler(setInteractionPrompt);
   }, []);
 
   // Fired when the user clicks an object (or empty space) in the scene
@@ -144,6 +160,75 @@ export function App() {
     setPlacedObjects((prev) => prev.filter((o) => o.id !== id));
   });
 
+  // ---- Environment: skybox + terrain (see components/Editor/EnvironmentPanel) ----
+
+  const handleSetSkyboxImage = async (file, options) => {
+    if (!engineRef.current) return;
+    setIsImporting(true);
+    try {
+      await engineRef.current.setSkyboxImage(file, options);
+    } catch (err) {
+      console.error('Failed to set skybox image:', err);
+      alert('Could not load that image as a skybox. Try a .jpg or .png photo.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleSetSkyboxGradient = (top, bottom) => {
+    engineRef.current?.setSkyboxGradient(top, bottom);
+  };
+
+  const handleClearSkybox = () => {
+    engineRef.current?.clearSkybox();
+  };
+
+  const handleSetTerrainTexture = async (file, tiling) => {
+    if (!engineRef.current) return;
+    setIsImporting(true);
+    try {
+      await engineRef.current.setTerrainTexture(file, tiling);
+    } catch (err) {
+      console.error('Failed to set terrain texture:', err);
+      alert('Could not load that image as a ground texture. Try a .jpg or .png.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleClearTerrainTexture = () => {
+    engineRef.current?.setTerrainColor();
+  };
+
+  // ---- Interactable objects (see components/Editor/InteractableControls) ----
+  // The engine only knows "close enough + E was pressed" (see
+  // AppManager's Interaction section); what happens is decided here. The
+  // default is just a brief on-screen toast — swap this for whatever the
+  // app actually needs (open a door, remove the object, play a sound, etc.)
+  // once there's a concrete use case for it.
+
+  const showInteractionMessage = (text) => {
+    setInteractionMessage(text);
+    window.clearTimeout(interactionMessageTimeoutRef.current);
+    interactionMessageTimeoutRef.current = window.setTimeout(
+      () => setInteractionMessage(null),
+      2500
+    );
+  };
+
+  const handleSetInteractable = withSelection((engine, id, label) => {
+    engine.setInteractable(id, {
+      label,
+      onInteract: () => showInteractionMessage(label)
+    });
+    setSelection((prev) => (prev && prev.id === id ? engine.getTransform(id) : prev));
+  });
+
+  const handleClearInteractable = withSelection((engine, id) => {
+    engine.clearInteractable(id);
+    setSelection((prev) => (prev && prev.id === id ? engine.getTransform(id) : prev));
+  });
+
   // ---- Active player controls (see components/Controls/PlayerModePanel) ----
 
   const handleSelectPlayer = (id) => {
@@ -178,7 +263,7 @@ export function App() {
         onExitPlayerMode={handleExitPlayerMode}
         onChangeViewMode={handleChangeViewMode}
       />
-      <TransformPanel
+      {/* <TransformPanel
         selection={selection}
         onPositionChange={handlePositionChange}
         onRotationChange={handleRotationChange}
@@ -186,7 +271,16 @@ export function App() {
         onDropToGround={handleDropToGround}
         onFocus={handleFocus}
         onDelete={handleDelete}
+      /> */}
+      <EnvironmentPanel
+        onSetSkyboxImage={handleSetSkyboxImage}
+        onSetSkyboxGradient={handleSetSkyboxGradient}
+        onClearSkybox={handleClearSkybox}
+        onSetTerrainTexture={handleSetTerrainTexture}
+        onClearTerrainTexture={handleClearTerrainTexture}
+        isBusy={isImporting}
       />
+     
     </div>
   );
 }

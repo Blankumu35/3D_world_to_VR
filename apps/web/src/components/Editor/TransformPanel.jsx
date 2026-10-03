@@ -1,9 +1,13 @@
 import React from 'react';
+import { GRID_SIZE } from '../../playcanvas/AppManager';
 
 /**
  * TransformPanel
  * Controlled UI for the selected object's position, rotation and scale.
- * Values flow down from App state; every change calls back up so the engine
+ * Junior mode only: sized for large touch targets and legible-at-a-glance
+ * numbers, everything the child needs and nothing more — no advanced/
+ * variable controls, no colour picker, no way to loosen the grid. Values
+ * flow down from App state; every change calls back up so the engine
  * remains the single source of truth.
  */
 export function TransformPanel({
@@ -20,7 +24,7 @@ export function TransformPanel({
       <div style={panelStyle}>
         <p style={titleStyle}>🎯 Selected Object</p>
         <p style={emptyStyle}>
-          Click an object to move, turn or resize it.
+          Tap an object to move, turn or resize it.
           <br />
           <br />
           <strong>Drag</strong> empty space to look around
@@ -50,6 +54,36 @@ export function TransformPanel({
 
   return (
     <div style={panelStyle}>
+      <style>{`
+        .jr-slider {
+          -webkit-appearance: none;
+          appearance: none;
+          height: 14px;
+          border-radius: 999px;
+          background: #E2E8F0;
+          outline: none;
+        }
+        .jr-slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          background: #2563EB;
+          border: 3px solid #fff;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+          cursor: pointer;
+        }
+        .jr-slider::-moz-range-thumb {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          background: #2563EB;
+          border: 3px solid #fff;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+          cursor: pointer;
+        }
+      `}</style>
+
       <p style={titleStyle}>🎯 Selected Object</p>
 
       {/* ---- Size ---- */}
@@ -62,6 +96,7 @@ export function TransformPanel({
           −
         </button>
         <input
+          className="jr-slider"
           type="range"
           min="-100"
           max="100"
@@ -126,6 +161,10 @@ export function TransformPanel({
       </div>
 
       {/* ---- Position ---- */}
+      {/* X/Z step in whole grid cells (see GRID_SIZE in AppManager.js) —
+          the engine snaps to the grid regardless, so showing finer
+          precision here would just be misleading. Y stays free/continuous:
+          height isn't part of the grid. */}
       <label style={labelStyle}>Position</label>
       <AxisSlider
         axis="X"
@@ -133,7 +172,7 @@ export function TransformPanel({
         value={x}
         min={-25}
         max={25}
-        step={0.1}
+        step={GRID_SIZE}
         onChange={(v) => handleAxis(0, v)}
       />
       <AxisSlider
@@ -151,7 +190,7 @@ export function TransformPanel({
         value={z}
         min={-25}
         max={25}
-        step={0.1}
+        step={GRID_SIZE}
         onChange={(v) => handleAxis(2, v)}
       />
       <div style={quickRowStyle}>
@@ -179,10 +218,12 @@ function formatFactor(factor) {
 }
 
 function AxisSlider({ axis, color, value, min, max, step, suffix = '', onChange }) {
+  const wholeStep = step >= 1;
   return (
     <div style={rowStyle}>
       <span style={{ ...axisBadgeStyle, background: color }}>{axis}</span>
       <input
+        className="jr-slider"
         type="range"
         min={min}
         max={max}
@@ -193,7 +234,7 @@ function AxisSlider({ axis, color, value, min, max, step, suffix = '', onChange 
       />
       <input
         type="number"
-        value={Number(value).toFixed(step >= 1 ? 0 : 1)}
+        value={Number(value).toFixed(wholeStep ? 0 : 1)}
         step={step}
         onChange={(e) => onChange(e.target.value)}
         style={numberInputStyle}
@@ -207,40 +248,40 @@ const panelStyle = {
   position: 'absolute',
   top: '20px',
   right: '20px',
-  width: '280px',
+  width: '320px',
   maxHeight: 'calc(100vh - 40px)',
   overflowY: 'auto',
-  background: 'rgba(255, 255, 255, 0.96)',
-  padding: '16px',
-  borderRadius: '12px',
-  boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+  background: 'rgba(255, 255, 255, 0.97)',
+  padding: '18px',
+  borderRadius: '16px',
+  boxShadow: '0 4px 24px rgba(0,0,0,0.18)',
   zIndex: 10,
   fontFamily: 'system-ui, sans-serif'
 };
 
-const titleStyle = { fontWeight: 'bold', margin: '0 0 12px 0', fontSize: '15px' };
-const emptyStyle = { fontSize: '13px', color: '#666', lineHeight: 1.6, margin: 0 };
+const titleStyle = { fontWeight: 800, margin: '0 0 14px 0', fontSize: '18px' };
+const emptyStyle = { fontSize: '15px', color: '#666', lineHeight: 1.7, margin: 0 };
 const labelStyle = {
   display: 'block',
-  fontSize: '12px',
-  fontWeight: 600,
+  fontSize: '14px',
+  fontWeight: 700,
   color: '#444',
-  margin: '14px 0 6px'
+  margin: '16px 0 8px'
 };
-const rowStyle = { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' };
+const rowStyle = { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' };
 const scaleReadoutStyle = {
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
-  fontSize: '12px',
+  fontSize: '14px',
   color: '#333'
 };
 const axisBadgeStyle = {
-  width: '20px',
-  height: '20px',
-  borderRadius: '4px',
+  width: '30px',
+  height: '30px',
+  borderRadius: '8px',
   color: '#fff',
-  fontSize: '11px',
+  fontSize: '14px',
   fontWeight: 'bold',
   display: 'flex',
   alignItems: 'center',
@@ -248,54 +289,57 @@ const axisBadgeStyle = {
   flexShrink: 0
 };
 const numberInputStyle = {
-  width: '50px',
-  padding: '4px 6px',
-  fontSize: '12px',
-  borderRadius: '6px',
-  border: '1px solid #CCC'
+  width: '64px',
+  padding: '8px 6px',
+  fontSize: '15px',
+  borderRadius: '8px',
+  border: '1px solid #CCC',
+  textAlign: 'center'
 };
-const suffixStyle = { fontSize: '11px', color: '#888', width: '8px' };
+const suffixStyle = { fontSize: '13px', color: '#888', width: '12px' };
 const stepButtonStyle = {
-  width: '26px',
-  height: '26px',
-  fontSize: '16px',
+  width: '40px',
+  height: '40px',
+  fontSize: '22px',
   fontWeight: 'bold',
   lineHeight: 1,
-  borderRadius: '6px',
+  borderRadius: '10px',
   border: '1px solid #CBD5E1',
   background: '#F8FAFC',
   cursor: 'pointer',
   flexShrink: 0
 };
-const quickRowStyle = { display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' };
+const quickRowStyle = { display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' };
 const chipStyle = {
   flex: 1,
-  padding: '6px 4px',
-  fontSize: '11px',
-  fontWeight: 600,
-  borderRadius: '6px',
+  padding: '10px 6px',
+  fontSize: '14px',
+  fontWeight: 700,
+  borderRadius: '10px',
   border: '1px solid #CBD5E1',
   background: '#F8FAFC',
   cursor: 'pointer',
-  whiteSpace: 'nowrap'
+  whiteSpace: 'nowrap',
+  minHeight: '44px'
 };
 const linkButtonStyle = {
   background: 'none',
   border: 'none',
   color: '#2563EB',
-  fontSize: '12px',
+  fontSize: '14px',
   cursor: 'pointer',
   padding: 0
 };
 const deleteButtonStyle = {
   width: '100%',
-  marginTop: '14px',
-  padding: '8px',
-  fontSize: '13px',
-  fontWeight: 600,
-  borderRadius: '8px',
+  marginTop: '16px',
+  padding: '12px',
+  fontSize: '15px',
+  fontWeight: 700,
+  borderRadius: '10px',
   border: 'none',
   background: '#EF4444',
   color: '#fff',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  minHeight: '48px'
 };

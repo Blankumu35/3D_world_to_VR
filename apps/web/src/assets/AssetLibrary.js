@@ -12,7 +12,7 @@
 
 export const OBJECTS = [
   { id: 'car', name: 'Car', icon: '🚗', url: '/apps/web/src/assets/objects/old_rusty_car.glb', type: 'object' },
-  //{ id: 'tree', name: 'Tree', icon: '🌳', url: '/assets/objects/tree.glb', type: 'object' },
+  { id: 'person', name: 'Man', icon: '👨', url: '/apps/web/src/assets/objects/low_poly_person.glb', type: 'object' },
   //{ id: 'house', name: 'House', icon: '🏠', url: '/assets/objects/house.glb', type: 'object' },
   //{ id: 'rock', name: 'Rock', icon: '🪨', url: '/assets/objects/rock.glb', type: 'object' },
   //{ id: 'lamp', name: 'Lamp', icon: '💡', url: '/assets/objects/lamp.glb', type: 'object' },

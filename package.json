@@ -12,7 +12,8 @@
     "@playcanvas/react": "^0.11.5",
     "playcanvas": "^2.22.2",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "sync-ammo": "^0.1.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.1.1",
