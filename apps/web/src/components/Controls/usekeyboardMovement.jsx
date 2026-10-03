@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { actionForKey } from './Keybindings .js';
+import { actionForKey } from './Keybindings.js';
 
 const IDLE_INPUT = {
   forward: false,
