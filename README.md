@@ -1,118 +1,150 @@
 # VR World Builder
 
-A browser-based 3D scene editor, built on [PlayCanvas](https://playcanvas.com/), that lets a user drag environments and objects into a scene, adjust them, and step into the result via WebXR.
+A browser-based 3D world builder for children, built on the [PlayCanvas](https://playcanvas.com/) engine. Users drag environments and objects into a scene, arrange them, change the sky and ground, walk around as a character, and (in progress) publish the world and step into it in VR through WebXR.
 
-## Getting Started
+Final-year project: *Build it in 3D, Step Inside it in VR*.
 
-**Prerequisites:** Node.js 26 or later, and npm.
+## Getting started
+
+**Prerequisites:** Node.js 22 or later, and npm.
 
 ```bash
 npm install
-npm run dev
+npm run dev        # front end, http://localhost:5173
+npm run server     # backend API, http://localhost:3001 (second terminal)
 ```
 
-Then open the URL the terminal prints (Vite's default is `http://localhost:5173`). No further setup is needed — PlayCanvas is installed as an npm dependency rather than loaded from a CDN, so the first `npm install` pulls in everything the editor needs.
-
-Other scripts, once you have them:
+Run both commands from the repo root, where `index.html` is. Vite forwards any request to `/api/...` to the backend, so the browser only talks to one address.
 
 | Command | Purpose |
 |---|---|
-| `npm run dev` | Start the local dev server with hot reload |
-| `npm run build` | Production build |
-| `npm run preview` | Serve the production build locally, to sanity-check it before deploying |
+| `npm run dev` | Front-end dev server with hot reload |
+| `npm run server` | Backend API, restarts when server files change |
+| `npm run build` | Production build into `dist/` |
+| `npm run preview` | Serve the production build locally to check it |
 
-**Testing VR:** the editor runs fine in any WebGL2 browser for building and editing. To actually enter VR you'll need a WebXR-capable browser on a headset (e.g. the Meta Quest browser) pointed at a `localhost` or HTTPS URL — WebXR refuses to start on plain HTTP.
+In production, `npm run build` then `node server/index.js` serves both the API and the built front end from one process.
 
-## Project Structure
+**Testing VR:** building and editing work in any WebGL2 browser. Entering VR needs a WebXR browser on a headset (for example the Meta Quest browser) loading the site over HTTPS or `localhost`. WebXR will not start on plain HTTP.
+
+## Project structure
 
 ```
-src/
-  main.jsx                    # React bootstrap — mounts <App />
-  App.jsx                     # Application shell — owns top-level state, wires UI to the engine
-  components/
-    Editor/
-      Canvas3D.jsx             # Hosts the PlayCanvas <canvas>; forwards pointer/drop events up to App
-      AssetLibraryPanel.jsx    # Drag-and-drop library of environments & objects, plus upload-your-own
-      TransformPanel.jsx       # Position / rotation / scale controls for the current selection
-      ModelImporter.jsx        # Earlier file/URL upload form — superseded by AssetLibraryPanel's
-                                # built-in uploader; check whether it's still referenced anywhere
-                                # before removing it
-    Controls/
-      CharacterControls.jsx    # WASD/arrow-key walk & run input
-      useKeyboardMovement.js   # Keyboard state tracking hook used by CharacterControls
-      keyBindings.js           # Key → movement-action mapping, kept separate so remapping is one edit
-  playcanvas/
-    AppManager.js              # Scene Manager — owns the PlayCanvas Application instance
-    AssetLibrary.js            # Asset Catalog — static list of built-in library items
-    environments.js            # Built-in environment presets (sky / ground / ambient colour sets)
+index.html                    # Entry page; loads apps/web/src/main.jsx
+vite.config.js                # Vite config: public folder location, /api proxy
+package.json
+
+apps/web/
+  public/assets/              # Static files served from the site root (/assets/...)
+    objects/                  # Placeable objects (.glb)
+      old_rusty_car.glb
+      low_poly_person.glb
+    environments/             # Whole-scene environments
+      american_school_classroom_interior_high-poly.glb
+      city/                   # glTF environment: scene.gltf + scene.bin + textures/
+        license.txt           #   (these must stay together)
+  src/
+    main.jsx                  # React entry point; mounts <App />
+    App.jsx                   # Application shell: top-level state, wires UI to the engine
+    index.css
+    assets/
+      AssetLibrary.js         # Catalog of built-in objects and environments shown in the library
+    components/
+      Editor/
+        Canvas3D.jsx          # Hosts the PlayCanvas <canvas>; forwards pointer and drop events
+        AssetLibraryPanel.jsx # Object/environment library, plus upload of your own .glb/.gltf
+        EnvironmentPanel.jsx  # Skybox (gradient or image) and ground texture settings
+        TransformPanel.jsx    # Position, rotation and scale of the selected object
+      Controls/
+        CharacterControls.jsx # Keyboard walk/run input
+        usekeyboardMovement.jsx # Hook tracking which movement keys are held
+        Keybindings.js        # Key → movement action mapping
+        PlayerModePanel.jsx   # Pick an object to control; normal / 1st / 3rd person camera
+      Generator/
+        PromptPanel.jsx       # Text prompt UI for AI-generated assets (not wired in yet)
+    playcanvas/
+      AppManager.js           # Owns the PlayCanvas Application: entities, camera, loading, XR
+    services/
+      index.js                # Placeholder for front-end API calls (empty)
+
+server/
+  index.js                    # Express app: /api routes, serves dist/ in production
+  route/
+    publish.js                # POST /api/scenes (publish, returns room code), GET /api/scenes/:code
+    generate.js               # /api/generate: text-to-3D jobs (stub, returns 501)
+  data/                       # Published scenes as JSON files (created at runtime, not in git)
 ```
 
 ## Architecture
 
-Four layers, matching the diagram in this repo (`diagram.png`):
-
 ```mermaid
 flowchart TD
-    User([Scene Creator])
+    User([Scene creator])
 
-    subgraph EditorUI["Editor UI"]
-        Main["main.jsx<br/>React Bootstrap"]
-        App["App.jsx<br/>Application Shell"]
-        Canvas["Canvas3D.jsx<br/>3D Canvas"]
+    subgraph UI["Front end (React)"]
+        App["App.jsx<br/>application shell"]
+        Canvas["Canvas3D.jsx"]
+        Library["AssetLibraryPanel.jsx"]
+        Env["EnvironmentPanel.jsx"]
+        Transform["TransformPanel.jsx"]
+        Player["PlayerModePanel.jsx<br/>CharacterControls.jsx"]
     end
 
-    subgraph Interaction["User Interaction"]
-        Library["Asset Library panel"]
-        Transform["TransformPanel.jsx<br/>Transform Controls"]
+    subgraph Runtime["Scene runtime"]
+        Manager["AppManager.js"]
+        Engine["PlayCanvas engine"]
     end
 
-    subgraph Runtime["Scene Runtime"]
-        Manager["AppManager.js<br/>Scene Manager"]
-        Entities["Scene Entity State"]
-        Transforms["Selection Transforms"]
-        CameraCtl["Camera Controls"]
-        Loader["GLB Asset Loader"]
-        Engine["PlayCanvas Engine"]
-    end
+    Catalog[("AssetLibrary.js")]
+    Files[("public/assets<br/>.glb / .gltf")]
+    API["server/<br/>Express API"]
+    XR(["WebXR"])
 
-    Catalog[("AssetLibrary.js<br/>Asset Catalog")]
-    Models[("GLB / GLTF Sources")]
-    XR(["WebXR Runtime"])
-
-    User -->|manipulates scene| Canvas
-    User -->|browses assets| Library
-    User -->|edits transforms| Transform
-
-    Main -->|mounts app| App
-    App -->|renders canvas| Canvas
-    App -->|forwards callbacks| Canvas
-    Canvas -->|reports drops| App
-
-    App -->|renders library| Library
-    App -->|renders controls| Transform
-    App -->|passes selection| Transform
-    Transform -->|submits changes| App
-    Library -->|submits asset| App
-    Library -->|reads catalog| Catalog
-
-    App -->|creates manager| Manager
-    App -->|loads asset| Manager
-    Manager -->|notifies selection| App
-    Manager -->|notifies transforms| App
-
-    Manager -->|maintains entities| Entities
-    Manager -->|updates transforms| Transforms
-    Manager -->|controls viewpoint| CameraCtl
-    Manager -->|imports model| Loader
-    Manager -->|renders scene| Engine
-    Manager -.->|starts VR session| XR
-    Loader -->|reads model| Models
+    User --> Canvas & Library & Env & Transform & Player
+    Library -->|reads| Catalog
+    Library & Env & Transform & Player -->|callbacks| App
+    Canvas -->|drops, clicks| App
+    App -->|public methods| Manager
+    Manager -->|selection, transforms| App
+    Manager --> Engine
+    Manager -->|loads models| Files
+    Manager -.->|planned| XR
+    App -.->|planned: publish / load| API
 ```
 
-**Editor UI** — `main.jsx` mounts `App.jsx`, which renders `Canvas3D.jsx` and passes it callbacks (`onSelectionChange`, `onTransformChange`, drop handling). `Canvas3D.jsx` owns nothing but the `<canvas>` element and event wiring; it has no scene logic of its own.
+**Front end.** `App.jsx` holds top-level state and renders the panels. Panels are presentational: they receive state as props and report user actions through callbacks. None of them touch the engine directly.
 
-**User Interaction** — the Asset Library panel and `TransformPanel.jsx` are presentational. `App.jsx` renders them and pushes state down (the current selection, the item catalog); they only ever call back up (`submits changes`, `submits asset`) rather than touching the engine directly.
+**Scene runtime.** `AppManager.js` is the only code that owns PlayCanvas objects. It manages the entity map, selection and transforms, camera modes (orbit, first person, third person), player movement with simple collision, skybox and terrain, proximity interactions, and model loading. `App.jsx` uses it only through its public methods (`loadGlbAsset`, `setSkyboxImage`, `setTerrainTexture`, `enterVR`, ...) and its callbacks.
 
-**Scene Runtime** — `AppManager.js` is the single class that owns the actual PlayCanvas `Application` instance. Everything that needs per-frame engine access lives here: the entity map, position/rotation/scale setters, camera modes (orbit, standing-inside, walk/run), and GLB loading. `App.jsx` talks to it only through its public methods (`loadGlbAsset`, `setEntityPosition`, `enterVR`, etc.) and its two callbacks (`onSelectionChange`, `onTransformChange`) — nothing outside `AppManager.js` touches a `pc.Entity` directly.
+**Assets.** Library items and user uploads both go through `AppManager.loadGlbAsset()`, which uses PlayCanvas's `container` loader and accepts `.glb` and `.gltf`. Library URLs point at `public/assets/`, which is served from the site root, so `apps/web/public/assets/objects/old_rusty_car.glb` is loaded as `/assets/objects/old_rusty_car.glb`. Uploaded files are held as temporary `blob:` URLs in the browser and are not yet saved anywhere.
 
-**Data layer** — `AssetLibrary.js` is a static list of built-in environments/objects (no network request, no loading state). Anything dragged in from outside that list — an uploaded `.glb`/`.gltf` file or a pasted URL — goes through the same `loadGlbAsset` path as a catalog item, so custom and built-in models behave identically once they're in the scene.
+**Backend.** A small Express server. Published scenes are stored as JSON files and retrieved by a six-character room code that avoids easily confused characters (0/O, 1/I/L).
+
+## Adding a built-in asset
+
+1. Put the file in `apps/web/public/assets/objects/` or `.../environments/`. A `.gltf` with separate `.bin` and texture files gets its own folder.
+2. Add an entry to `apps/web/src/assets/AssetLibrary.js` with a URL starting `/assets/...` (no `public`).
+3. Record the source and licence under [Credits](#credits).
+
+Large models should be optimised before use, since a Quest headset has far less memory and GPU power than a laptop:
+
+```bash
+npx @gltf-transform/cli optimize "path/to/scene.gltf" "path/to/out.glb" --texture-compress webp --texture-size 1024
+```
+
+## Status
+
+| Area | State |
+|---|---|
+| Editor: place, select, transform, delete objects | Working |
+| Skybox, terrain texture, collision, player mode | Working |
+| Proximity interactions | Engine side done; no UI to assign them yet |
+| Saving / loading scenes | Not started (scene format to be defined) |
+| Publishing | Backend routes done; front end not connected |
+| VR viewing | `enterVR()` exists; no button, locomotion or controller input yet |
+| AI-generated assets | UI stub only; backend returns 501 |
+
+## Credits
+
+- "full_gameready_city_buildings" by [ap-school](https://sketchfab.com/ap-school), [Sketchfab](https://sketchfab.com/3d-models/full-gameready-city-buildings-19d5a4e5416c458982486e608a34930b), licensed under [CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/).
+- `old_rusty_car.glb`, `low_poly_person.glb`, `american_school_classroom_interior_high-poly.glb`: source and licence to be added.
