@@ -1,2 +1,0 @@
-declare const _default: "\nvar localPos = meshLocalPos;\nlet rotResultXY = rotateWithMatrix(localPos.xy, inAngle);\nlocalPos = vec3f(rotResultXY.rotatedVec, localPos.z);\nrotMatrix = rotResultXY.matrix;\n\nlet rotResultYZ = rotateWithMatrix(localPos.yz, inAngle);\nlocalPos = vec3f(localPos.x, rotResultYZ.rotatedVec);\nrotMatrix = rotResultYZ.matrix;\n\nbillboard(particlePos, quadXY);\n";
-export default _default;
