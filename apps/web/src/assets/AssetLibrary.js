@@ -11,8 +11,8 @@
 // urls below (or fetch this list from the server instead of hardcoding it).
 
 export const OBJECTS = [
-  { id: 'car', name: 'Car', icon: '🚗', url: '/apps/web/src/assets/objects/old_rusty_car.glb', type: 'object' },
-  { id: 'person', name: 'Man', icon: '👨', url: '/apps/web/src/assets/objects/low_poly_person.glb', type: 'object' },
+  { id: 'car', name: 'Car', icon: '🚗', url: 'public/assets/objects/old_rusty_car.glb', type: 'object' },
+  { id: 'person', name: 'Man', icon: '👨', url: 'public/assets/objects/low_poly_person.glb', type: 'object' },
   //{ id: 'house', name: 'House', icon: '🏠', url: '/assets/objects/house.glb', type: 'object' },
   //{ id: 'rock', name: 'Rock', icon: '🪨', url: '/assets/objects/rock.glb', type: 'object' },
   //{ id: 'lamp', name: 'Lamp', icon: '💡', url: '/assets/objects/lamp.glb', type: 'object' },
@@ -20,7 +20,7 @@ export const OBJECTS = [
 ];
 
 export const ENVIRONMENTS = [
-      { id: 'school', name: 'School', icon: '🌱', url: '/apps/web/src/assets/environments/american_school_classroom_interior_high-poly.glb', type: 'environment' },
+      { id: 'school', name: 'School', icon: '🌱', url: 'public/assets/environments/american_school_classroom_interior_high-poly.glb', type: 'environment' },
 
  // { id: 'grass-field', name: 'Grass Field', icon: '🌱', url: '/assets/environments/grass-field.glb', type: 'environment' },
  // { id: 'desert', name: 'Desert', icon: '🏜️', url: '/assets/environments/desert.glb', type: 'environment' },
