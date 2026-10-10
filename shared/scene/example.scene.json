@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "meta": {
+    "title": "My first world",
+    "createdAt": "2026-10-10T19:00:00.000Z",
+    "updatedAt": "2026-10-10T19:12:00.000Z"
+  },
+  "environment": {
+    "sky": { "type": "gradient", "top": "#4a6fa5", "bottom": "#dfe9f3" },
+    "ground": { "type": "color", "color": "#475161" }
+  },
+  "entities": [
+    {
+      "id": "env_1760123400000",
+      "name": "City",
+      "type": "environment",
+      "asset": { "source": "builtin", "id": "city" },
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0],
+      "baseScale": 1,
+      "scaleLevel": 0,
+      "interaction": null
+    },
+    {
+      "id": "obj_1760123455000",
+      "name": "Car",
+      "type": "object",
+      "asset": { "source": "builtin", "id": "car" },
+      "position": [2.5, 0, -1],
+      "rotation": [0, 90, 0],
+      "baseScale": 0.42,
+      "scaleLevel": 10,
+      "interaction": {
+        "label": "Honk",
+        "action": { "type": "message", "text": "Beep beep!" }
+      }
+    },
+    {
+      "id": "obj_1760123480000",
+      "name": "Man",
+      "type": "object",
+      "asset": { "source": "builtin", "id": "person" },
+      "position": [0, 0, 2],
+      "rotation": [0, 0, 0],
+      "baseScale": 0.85,
+      "scaleLevel": 0,
+      "interaction": null
+    }
+  ],
+  "player": { "entityId": "obj_1760123480000", "view": "third-person" }
+}

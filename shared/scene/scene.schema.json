@@ -1,0 +1,396 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vr-world-builder/scene.schema.json",
+  "title": "VR World Builder scene",
+  "description": "A saved or published world. Version 1. Assets are referenced by id, never by URL, so scenes survive redeploys and file moves.",
+  "type": "object",
+  "required": [
+    "version",
+    "meta",
+    "environment",
+    "entities",
+    "player"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "description": "Scene format version. Bump this whenever the format changes, and add a migration in migrate.js.",
+      "const": 1
+    },
+    "meta": {
+      "type": "object",
+      "required": [
+        "title",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "sky",
+        "ground"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sky": {
+          "description": "Background behind the scene.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "none",
+                "gradient",
+                "image"
+              ]
+            }
+          },
+          "discriminator": {
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "none"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "type",
+                "top",
+                "bottom"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "gradient"
+                },
+                "top": {
+                  "$ref": "#/$defs/hexColor"
+                },
+                "bottom": {
+                  "$ref": "#/$defs/hexColor"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "type",
+                "asset"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "image"
+                },
+                "asset": {
+                  "$ref": "#/$defs/assetRef"
+                },
+                "flipV": {
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            }
+          ]
+        },
+        "ground": {
+          "description": "The ground plane under everything.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "color",
+                "texture"
+              ]
+            }
+          },
+          "discriminator": {
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "type",
+                "color"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "color"
+                },
+                "color": {
+                  "$ref": "#/$defs/hexColor"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "type",
+                "asset",
+                "tiling"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "texture"
+                },
+                "asset": {
+                  "$ref": "#/$defs/assetRef"
+                },
+                "tiling": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000
+                    },
+                    {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000
+                    }
+                  ],
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "entities": {
+      "description": "Everything placed in the world, including environment models.",
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "player": {
+      "description": "The object the user controls, or null for free camera.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "entityId",
+            "view"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "entityId": {
+              "$ref": "#/$defs/entityId"
+            },
+            "view": {
+              "enum": [
+                "normal",
+                "third-person",
+                "first-person"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "hexColor": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$"
+    },
+    "vec3": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "minimum": -10000,
+        "maximum": 10000
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "entityId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "assetRef": {
+      "description": "Which file to load. builtin: an id from AssetLibrary.js. upload / generated: an id issued by the server. Browser-only blob: URLs cannot be saved.",
+      "type": "object",
+      "required": [
+        "source",
+        "id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": [
+            "builtin",
+            "upload",
+            "generated"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "type",
+        "asset",
+        "position",
+        "rotation",
+        "baseScale",
+        "scaleLevel",
+        "interaction"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/entityId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "type": {
+          "enum": [
+            "object",
+            "environment"
+          ]
+        },
+        "asset": {
+          "$ref": "#/$defs/assetRef"
+        },
+        "position": {
+          "$ref": "#/$defs/vec3",
+          "description": "World position in metres."
+        },
+        "rotation": {
+          "$ref": "#/$defs/vec3",
+          "description": "Euler angles in degrees, each in [-180, 180]."
+        },
+        "baseScale": {
+          "description": "Scale chosen when the model was first imported. Stored so loading does not re-normalise the model.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100000
+        },
+        "scaleLevel": {
+          "description": "User-facing scale level, as in AppManager.setEntityScaleLevel.",
+          "type": "number",
+          "minimum": -100,
+          "maximum": 100
+        },
+        "interaction": {
+          "description": "What happens when the player presses E nearby, or null.",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "label",
+                "action"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                },
+                "action": {
+                  "$ref": "#/$defs/action"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "action": {
+      "description": "Behaviours are data, not code, so they can be saved. Add new types here as new oneOf branches.",
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "message"
+          ]
+        }
+      },
+      "discriminator": {
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "message"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        }
+      ]
+    }
+  }
+}

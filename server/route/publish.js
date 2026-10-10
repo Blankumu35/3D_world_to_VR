@@ -6,6 +6,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { validateScene } from '../../shared/scene/validateScene.js';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCENES_DIR = path.resolve(__dirname, '..', 'data', 'scenes');
