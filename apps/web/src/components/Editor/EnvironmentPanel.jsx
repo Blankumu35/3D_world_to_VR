@@ -1,52 +1,50 @@
 import React, { useRef, useState } from 'react';
+import {
+  sectionStyle,
+  firstSectionStyle,
+  sectionLabelStyle,
+  hintStyle,
+  rowStyle,
+  chipStyle,
+  checkboxLabelStyle,
+  numberInputStyle,
+  MUTED
+} from './panelStyles';
 
-// A handful of ready-made gradients so "make it immersive" doesn't require
-// hunting down a 360 photo first — pick one, or drop in your own image.
+// Shortcuts for the time-of-day slider. Each switches to the automatic sky
+// (which follows the time) and jumps to a good-looking moment.
 const SKY_PRESETS = [
-  { name: 'Clear Day', top: '#4a90d9', bottom: '#dfe9f3' },
-  { name: 'Sunset', top: '#2b3a67', bottom: '#f0956a' },
-  { name: 'Night', top: '#02040a', bottom: '#1b2540' }
+  { name: '☀️ Day', time: 12 },
+  { name: '🌇 Sunset', time: 17.75 },
+  { name: '🌙 Night', time: 23 }
 ];
 
-const panelStyle = {
-  position: 'absolute',
-  top: 16,
-  right: 16,
-  width: 220,
-  padding: 12,
-  borderRadius: 8,
-  background: 'rgba(20, 20, 26, 0.82)',
-  color: '#eee',
-  font: '12px system-ui, sans-serif',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 10
-};
+/** 13.5 -> "13:30" */
+function formatTime(hours) {
+  const h = Math.floor(hours) % 24;
+  const m = Math.round((hours - Math.floor(hours)) * 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
 
-const sectionTitleStyle = { fontWeight: 600, marginBottom: 4 };
-const rowStyle = { display: 'flex', gap: 6, flexWrap: 'wrap' };
-const buttonStyle = {
-  flex: '1 1 auto',
-  padding: '4px 8px',
-  borderRadius: 4,
-  border: '1px solid rgba(255,255,255,0.25)',
-  background: 'rgba(255,255,255,0.08)',
-  color: '#eee',
-  cursor: 'pointer',
-  fontSize: 11
-};
+const isDaytime = (hours) => hours >= 6 && hours <= 18;
 
 /**
- * Skybox photo/gradient + terrain texture controls. Talks to AppManager
- * only through the callback props below — nothing here reaches into
- * engineRef directly, same pattern as AssetLibraryPanel's onAddAsset.
+ * EnvironmentPanel ("World" tab of SidePanel)
+ * Sky, sun & moon, and ground controls. Talks to AppManager only through
+ * the callback props below — nothing here reaches into engineRef directly,
+ * same pattern as AssetLibraryPanel's onAddAsset.
  */
 export function EnvironmentPanel({
+  skyType,
   onSetSkyboxImage,
-  onSetSkyboxGradient,
+  onSetDynamicSky,
   onClearSkybox,
   onSetTerrainTexture,
   onClearTerrainTexture,
+  timeOfDay,
+  shadows,
+  onSetTimeOfDay,
+  onSetShadows,
   isBusy
 }) {
   const skyFileInputRef = useRef(null);
@@ -67,34 +65,65 @@ export function EnvironmentPanel({
   };
 
   return (
-    <div style={panelStyle}>
-      <div>
-        <div style={sectionTitleStyle}>Skybox</div>
+    <div>
+      {/* ---- Time of day: drives the sun/moon and the automatic sky ---- */}
+      <div style={firstSectionStyle}>
+        <span style={sectionLabelStyle}>Time of day</span>
         <div style={rowStyle}>
           {SKY_PRESETS.map((p) => (
             <button
               key={p.name}
-              style={buttonStyle}
+              style={chipStyle}
               disabled={isBusy}
-              onClick={() => onSetSkyboxGradient(p.top, p.bottom)}
+              onClick={() => {
+                onSetDynamicSky();
+                onSetTimeOfDay(p.time);
+              }}
             >
               {p.name}
             </button>
           ))}
         </div>
-        <div style={{ ...rowStyle, marginTop: 6, alignItems: 'center' }}>
+        <label style={{ ...rowStyle, gap: '10px', marginTop: '10px' }}>
+          <span aria-hidden="true" style={{ width: '18px', textAlign: 'center' }}>
+            {isDaytime(timeOfDay) ? '☀️' : '🌙'}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={24}
+            step={0.25}
+            value={timeOfDay}
+            onChange={(e) => onSetTimeOfDay(Number(e.target.value))}
+            aria-label="Time of day"
+            style={{ flex: 1 }}
+          />
+          <span style={{ width: '40px', textAlign: 'right', fontSize: '13px', fontVariantNumeric: 'tabular-nums' }}>
+            {formatTime(timeOfDay)}
+          </span>
+        </label>
+        <label style={checkboxLabelStyle}>
+          <input type="checkbox" checked={shadows} onChange={(e) => onSetShadows(e.target.checked)} />
+          Shadows
+        </label>
+      </div>
+
+      {/* ---- Sky ---- */}
+      <div style={sectionStyle}>
+        <span style={sectionLabelStyle}>Sky</span>
+        <div style={rowStyle}>
           <button
-            style={buttonStyle}
+            style={chipStyle}
             disabled={isBusy}
             onClick={() => skyFileInputRef.current?.click()}
           >
             Upload photo…
           </button>
-          <button style={buttonStyle} disabled={isBusy} onClick={onClearSkybox}>
-            Clear
+          <button style={chipStyle} disabled={isBusy} onClick={onClearSkybox}>
+            Plain
           </button>
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+        <label style={checkboxLabelStyle}>
           <input
             type="checkbox"
             checked={flipSky}
@@ -102,6 +131,18 @@ export function EnvironmentPanel({
           />
           Photo looks upside down
         </label>
+        {skyType === 'image' && (
+          <p style={hintStyle}>Your sky photo stays the same at every time of day.</p>
+        )}
+        {skyType !== 'dynamic' && (
+          <button
+            style={{ ...chipStyle, width: '100%', marginTop: '8px' }}
+            disabled={isBusy}
+            onClick={onSetDynamicSky}
+          >
+            Make the sky follow the time
+          </button>
+        )}
         <input
           ref={skyFileInputRef}
           type="file"
@@ -111,30 +152,32 @@ export function EnvironmentPanel({
         />
       </div>
 
-      <div>
-        <div style={sectionTitleStyle}>Ground texture</div>
+      {/* ---- Ground ---- */}
+      <div style={{ ...sectionStyle, paddingBottom: 0 }}>
+        <span style={sectionLabelStyle}>Ground</span>
         <div style={rowStyle}>
           <button
-            style={buttonStyle}
+            style={chipStyle}
             disabled={isBusy}
             onClick={() => terrainFileInputRef.current?.click()}
           >
             Upload texture…
           </button>
-          <button style={buttonStyle} disabled={isBusy} onClick={onClearTerrainTexture}>
+          <button style={chipStyle} disabled={isBusy} onClick={onClearTerrainTexture}>
             Plain colour
           </button>
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
-          Tiling
+        <label style={{ ...rowStyle, gap: '8px', marginTop: '8px', fontSize: '13px' }}>
+          Repeat texture
           <input
             type="number"
             min={1}
             max={100}
             value={tiling}
             onChange={(e) => setTiling(Number(e.target.value) || 1)}
-            style={{ width: 48 }}
+            style={numberInputStyle}
           />
+          <span style={{ fontSize: '12px', color: MUTED }}>times</span>
         </label>
         <input
           ref={terrainFileInputRef}

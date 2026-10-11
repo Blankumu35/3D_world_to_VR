@@ -5,11 +5,20 @@
 //   2. add MIGRATIONS[oldVersion] that returns a scene at oldVersion + 1
 // Old saved and published scenes then keep loading without being rewritten.
 
-export const CURRENT_SCENE_VERSION = 1;
+export const CURRENT_SCENE_VERSION = 2;
 
 const MIGRATIONS = {
-  // Example for the future:
-  // 1: (scene) => ({ ...scene, version: 2, entities: scene.entities.map(...) }),
+  // v1 -> v2: added environment.lighting (sun/moon time of day + shadows).
+  // Worlds saved before lighting existed get midday sun with shadows,
+  // which is how the editor looked when they were made.
+  1: (scene) => ({
+    ...scene,
+    version: 2,
+    environment: {
+      ...scene.environment,
+      lighting: { timeOfDay: 12, shadows: true }
+    }
+  })
 };
 
 export function migrateScene(scene) {

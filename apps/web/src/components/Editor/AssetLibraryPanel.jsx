@@ -25,7 +25,7 @@ export function AssetLibraryPanel({ onAddAsset, isImporting }) {
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData(
       ASSET_DRAG_MIME,
-      JSON.stringify({ source: item.url, name: item.name, type: item.type })
+      JSON.stringify({ id: item.id, source: item.url, name: item.name, type: item.type })
     );
     // Fallback plain-text payload so a drop handler that only reads text
     // still gets something useful.
@@ -34,7 +34,7 @@ export function AssetLibraryPanel({ onAddAsset, isImporting }) {
 
   const handleCardClick = (item) => {
     if (isImporting) return;
-    onAddAsset({ source: item.url, name: item.name, type: item.type });
+    onAddAsset({ id: item.id, source: item.url, name: item.name, type: item.type });
   };
 
   // ---- Upload-your-own (local file or URL), tagged with the active tab's type ----

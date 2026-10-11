@@ -1,4 +1,6 @@
 import * as pc from 'playcanvas';
+import { validateScene } from '../../../../shared/scene/validateScene.js';
+import { migrateScene, CURRENT_SCENE_VERSION } from '../../../../shared/scene/migrate.js';
 
 /**
  * Converts a -100..100 slider level into a scale multiplier.
@@ -18,6 +20,120 @@ export function levelToFactor(level) {
 
 export function factorToLevel(factor) {
   return (Math.log(factor) / Math.log(SCALE_LEVEL_BASE)) * SCALE_LEVEL_DIVISOR;
+}
+
+const DEFAULT_GROUND_COLOR = [0.28, 0.32, 0.38];
+
+// Scene files store colours as "#rrggbb"; the engine uses [r, g, b] in 0..1.
+function rgbToHex(rgb) {
+  return '#' + rgb.map((c) => Math.round(c * 255).toString(16).padStart(2, '0')).join('');
+}
+function hexToRgb(hex) {
+  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+}
+const round4 = (n) => Math.round(n * 10000) / 10000;
+
+// Lighting a new world starts with: midday sun, shadows on.
+const DEFAULT_LIGHTING = { timeOfDay: 12, shadows: true };
+
+function defaultEnvironmentState() {
+  return {
+    sky: { type: 'dynamic' },
+    ground: { type: 'color', color: rgbToHex(DEFAULT_GROUND_COLOR) },
+    lighting: { ...DEFAULT_LIGHTING }
+  };
+}
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const smoothstep = (edge0, edge1, x) => {
+  const t = Math.min(Math.max((x - edge0) / (edge1 - edge0), 0), 1);
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Works out where the sun or moon is and what light it gives, for a time of
+ * day in hours (0–24). Kept as a plain function, separate from the engine,
+ * so it's easy to reason about and test.
+ *
+ *   06:00–18:00  the sun rises in the east, peaks at noon, sets in the west
+ *   18:00–06:00  the moon follows the same path, lower and dimmer
+ *
+ * Returns { body: 'sun' | 'moon', elevation (deg), azimuth (deg),
+ *           color [r,g,b], intensity, ambient [r,g,b] }.
+ */
+export function computeSkyLight(timeOfDay) {
+  const t = ((timeOfDay % 24) + 24) % 24;
+  const isDay = t >= 6 && t <= 18;
+  // 0 at rise, 1 at set
+  const progress = isDay ? (t - 6) / 12 : (((t - 18) + 24) % 24) / 12;
+  const arc = Math.sin(progress * Math.PI); // 0 at the horizon, 1 overhead
+  const maxElevation = isDay ? 70 : 50;
+  // Never quite on the horizon: a light skimming the ground gives a dark
+  // scene and stretched, flickering shadows.
+  const elevation = Math.max(15, arc * maxElevation);
+  const azimuth = 90 + progress * 180; // east -> south -> west
+
+  if (isDay) {
+    const day = smoothstep(10, 35, arc * maxElevation); // 0 = low sun, 1 = high
+    return {
+      body: 'sun',
+      elevation,
+      azimuth,
+      color: lerp3([1.0, 0.55, 0.3], [1.0, 0.97, 0.9], day),
+      intensity: lerp(0.9, 1.15, day),
+      ambient: lerp3([0.42, 0.33, 0.33], [0.4, 0.42, 0.46], day)
+    };
+  }
+  return {
+    body: 'moon',
+    elevation,
+    azimuth,
+    color: [0.62, 0.72, 1.0],
+    intensity: 0.5,
+    // Kept fairly bright on purpose: a night scene children can't see
+    // anything in isn't much fun to build.
+    ambient: [0.2, 0.22, 0.34]
+  };
+}
+
+/**
+ * Sky colours through the day, as [hour, topColour, horizonColour]. The
+ * automatic ("dynamic") sky blends between the two nearest entries, so
+ * moving the time-of-day slider fades the sky smoothly. 24:00 repeats
+ * 00:00 so the night wraps round.
+ */
+const SKY_KEYFRAMES = [
+  [0, '#02040a', '#141a30'],
+  [4.5, '#060a1a', '#1b2240'],
+  [5.5, '#1a2350', '#5a4a72'],
+  [6.25, '#2b3a67', '#f2a07b'], // sunrise
+  [7.5, '#4a7fc1', '#f5d6b8'],
+  [9, '#3f7fd1', '#cfe3f5'],
+  [12, '#3b82d6', '#dbeaf7'], // noon
+  [16, '#4a86cf', '#e2e8f0'],
+  [17.25, '#3d4f86', '#f6b26b'], // golden hour
+  [18, '#2b3a67', '#f0956a'], // sunset
+  [19, '#1b2147', '#6b4a6e'], // dusk
+  [20.5, '#070b1c', '#1b2540'],
+  [24, '#02040a', '#141a30']
+];
+
+const hexToRgb255 = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const rgb255ToHex = (rgb) => '#' + rgb.map((c) => Math.round(c).toString(16).padStart(2, '0')).join('');
+
+/** Sky gradient for a time of day: { top, bottom } as "#rrggbb". */
+export function computeSkyColors(timeOfDay) {
+  const t = Math.min(Math.max(timeOfDay, 0), 24);
+  let i = 0;
+  while (i < SKY_KEYFRAMES.length - 2 && SKY_KEYFRAMES[i + 1][0] <= t) i++;
+  const [h0, top0, bottom0] = SKY_KEYFRAMES[i];
+  const [h1, top1, bottom1] = SKY_KEYFRAMES[i + 1];
+  const k = h1 === h0 ? 0 : (t - h0) / (h1 - h0);
+  return {
+    top: rgb255ToHex(lerp3(hexToRgb255(top0), hexToRgb255(top1), k)),
+    bottom: rgb255ToHex(lerp3(hexToRgb255(bottom0), hexToRgb255(bottom1), k))
+  };
 }
 
 /**
@@ -51,9 +167,14 @@ export class AppManager {
     /**
      * @type {Map<string, {
      *   entity: pc.Entity,
-     *   baseScale: number,   // scale chosen at import time (normalised)
-     *   scaleLevel: number,  // -100..100, user-facing
-     *   rotation: number[]   // euler degrees [x, y, z]
+     *   baseRotation: pc.Quat, // the model's own root rotation (kept)
+     *   baseScale: number,     // scale chosen at import time (normalised)
+     *   scaleLevel: number,    // -100..100, user-facing
+     *   rotation: number[],    // user euler degrees [x, y, z], on top of baseRotation
+     *   name: string,
+     *   type: 'object' | 'environment',
+     *   assetRef: { source: string, id: string } | null, // null = can't be saved
+     *   interactable: { label: string, action: object } | null
      * }>}
      */
     this.entities = new Map();
@@ -102,9 +223,29 @@ export class AppManager {
       moved: false
     };
 
-    // Skybox entity (see the Skybox section) — null until setSkyboxImage/
-    // setSkyboxGradient is called for the first time.
+    // Skybox entity (see the Skybox section) — null until a sky is shown.
+    // The gradient canvas/texture are made once and redrawn in place, so
+    // dragging the time slider doesn't create a new GPU texture per frame.
     this.skybox = null;
+    this.gradientCanvas = null;
+    this.gradientTexture = null;
+
+    // What the sky and ground are currently set to, in scene-file form, so
+    // serializeScene() can save it. Kept up to date by the setters below.
+    this.environmentState = defaultEnvironmentState();
+
+    // Directional light and the visible sun/moon disc (see the Sun & moon
+    // section). Created in init().
+    this.sun = null;
+    this.celestial = null;
+    this.celestialDir = new pc.Vec3(0, 1, 0);
+
+    // Title and creation time of the world being edited (see loadScene).
+    this.sceneMeta = { title: 'My world', createdAt: new Date().toISOString() };
+
+    // Called with (entityId, action) when the player presses E near an
+    // interactable. The app decides what each action type does.
+    this.interactionHandler = null;
 
     // Interaction: entities can be marked with setInteractable(); the
     // nearest one within interactRadius of the character is tracked here
@@ -156,19 +297,27 @@ export class AppManager {
     this.app.root.addChild(this.camera);
     this.updateCamera();
 
-    const light = new pc.Entity('SunLight', this.app);
-    light.addComponent('light', {
+    // The sun (or moon): one directional light, moved and recoloured by
+    // applyLighting(). Shadow settings are a compromise for Quest headsets:
+    // a 2048 map covering 60 units around the camera.
+    this.sun = new pc.Entity('SunLight', this.app);
+    this.sun.addComponent('light', {
       type: 'directional',
       color: new pc.Color(1, 1, 1),
-      intensity: 1
+      intensity: 1,
+      castShadows: true,
+      shadowResolution: 2048,
+      shadowDistance: 60,
+      shadowBias: 0.2,
+      normalOffsetBias: 0.05
     });
-    this.app.root.addChild(light);
-    light.setEulerAngles(45, 30, 0);
+    this.app.root.addChild(this.sun);
+    this.createCelestialEntity();
 
     this.ground = new pc.Entity('Ground', this.app);
     this.ground.addComponent('render', { type: 'plane' });
     const groundMat = new pc.StandardMaterial();
-    groundMat.diffuse = new pc.Color(0.28, 0.32, 0.38);
+    groundMat.diffuse = new pc.Color(...DEFAULT_GROUND_COLOR);
     groundMat.update();
     this.ground.render.meshInstances[0].material = groundMat;
     this.app.root.addChild(this.ground);
@@ -189,9 +338,11 @@ export class AppManager {
       // Keeps the skybox "infinitely far away" by re-centring it on the
       // camera every frame instead of letting the camera move away from it.
       if (this.skybox) this.skybox.setPosition(this.camera.getPosition());
+      this.updateCelestialPosition();
     };
     this.app.on('update', this.updateHandler);
 
+    this.applyLighting();
     this.app.start();
   }
 
@@ -340,7 +491,8 @@ export class AppManager {
   createSkyboxEntity() {
     if (this.skybox) return this.skybox;
     const sky = new pc.Entity('Skybox', this.app);
-    sky.addComponent('render', { type: 'sphere' });
+    // The sky must never block the sun or be shaded by it.
+    sky.addComponent('render', { type: 'sphere', castShadows: false, receiveShadows: false });
     const mat = new pc.StandardMaterial();
     mat.cull = pc.CULLFACE_FRONT; // see the inside of the sphere
     mat.diffuse = new pc.Color(0, 0, 0); // scene lights shouldn't tint it
@@ -358,8 +510,10 @@ export class AppManager {
    * Loads an image (File/Blob from a file input, or a URL) as the skybox.
    * @param {boolean} flipV - some equirectangular photos come out upside
    *   down through this mapping; flip if so.
+   * @param {object|null} assetRef - scene-file asset ref ({ source, id })
+   *   for this image, or null for a local file that can't be saved yet.
    */
-  setSkyboxImage(source, { flipV = false } = {}) {
+  setSkyboxImage(source, { flipV = false, assetRef = null } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.app) return reject(new Error('PlayCanvas application not ready'));
 
@@ -386,51 +540,166 @@ export class AppManager {
         mat.emissive = new pc.Color(1, 1, 1);
         mat.emissiveMapTiling = new pc.Vec2(1, flipV ? -1 : 1);
         mat.update();
+        this.environmentState.sky = { type: 'image', asset: assetRef, flipV };
         resolve(sky);
       });
     });
   }
 
   /**
-   * Two-colour vertical gradient, generated on a small offscreen canvas —
-   * a quick "set the mood" option (dusk, night, clear day) with no photo
-   * needed. `topColor`/`bottomColor` are any CSS colour string.
+   * Two-colour vertical gradient, drawn on a small offscreen canvas. Used
+   * both for a fixed gradient sky (from an older saved world) and for the
+   * automatic sky, which redraws it whenever the time of day changes.
+   * `topColor`/`bottomColor` are any CSS colour string.
    */
-  setSkyboxGradient(topColor = '#4a6fa5', bottomColor = '#dfe9f3') {
+  drawSkyGradient(topColor, bottomColor) {
     if (!this.app) return null;
 
     const height = 128;
-    const canvas = document.createElement('canvas');
-    canvas.width = 2;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
+    if (!this.gradientCanvas) {
+      this.gradientCanvas = document.createElement('canvas');
+      this.gradientCanvas.width = 2;
+      this.gradientCanvas.height = height;
+    }
+    const ctx = this.gradientCanvas.getContext('2d');
     const grad = ctx.createLinearGradient(0, 0, 0, height);
     grad.addColorStop(0, topColor);
     grad.addColorStop(1, bottomColor);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 2, height);
 
-    const texture = new pc.Texture(this.app.graphicsDevice, {
-      width: 2,
-      height,
-      format: pc.PIXELFORMAT_R8_G8_B8_A8
-    });
-    texture.setSource(canvas);
+    if (!this.gradientTexture) {
+      this.gradientTexture = new pc.Texture(this.app.graphicsDevice, {
+        width: 2,
+        height,
+        format: pc.PIXELFORMAT_R8_G8_B8_A8
+      });
+      this.gradientTexture.setSource(this.gradientCanvas);
+    } else {
+      this.gradientTexture.upload(); // re-send the redrawn canvas to the GPU
+    }
 
     const sky = this.createSkyboxEntity();
     const mat = sky.render.meshInstances[0].material;
-    mat.emissiveMap = texture;
-    mat.emissive = new pc.Color(1, 1, 1);
-    mat.emissiveMapTiling = new pc.Vec2(1, 1);
-    mat.update();
+    if (mat.emissiveMap !== this.gradientTexture) {
+      mat.emissiveMap = this.gradientTexture;
+      mat.emissive = new pc.Color(1, 1, 1);
+      mat.emissiveMapTiling = new pc.Vec2(1, 1);
+      mat.update();
+    }
     return sky;
+  }
+
+  /** A fixed two-colour sky that doesn't change with the time of day. */
+  setSkyboxGradient(topColor = '#4a6fa5', bottomColor = '#dfe9f3') {
+    const sky = this.drawSkyGradient(topColor, bottomColor);
+    this.environmentState.sky = { type: 'gradient', top: topColor, bottom: bottomColor };
+    return sky;
+  }
+
+  /**
+   * The automatic sky: its colours follow the time of day (see
+   * computeSkyColors), redrawn by applyLighting whenever the time changes.
+   */
+  setDynamicSky() {
+    this.environmentState.sky = { type: 'dynamic' };
+    this.applyLighting();
   }
 
   /** Back to the plain clear-color background (see the camera's clearColor). */
   clearSkybox() {
+    this.environmentState.sky = { type: 'none' };
     if (!this.skybox) return;
     this.skybox.destroy();
     this.skybox = null;
+  }
+
+  // ------------------------------------------------------------------
+  // Sun & moon
+  //
+  // One directional light stands in for whichever of the sun or moon is
+  // up (see computeSkyLight for the maths). A small glowing disc is drawn
+  // in the sky in the same direction, so children can see where the light
+  // and shadows are coming from. Like the skybox, the disc follows the
+  // camera's position so it always looks infinitely far away.
+  // ------------------------------------------------------------------
+
+  createCelestialEntity() {
+    const disc = new pc.Entity('SunMoonDisc', this.app);
+    disc.addComponent('render', {
+      type: 'sphere',
+      castShadows: false,
+      receiveShadows: false
+    });
+    const mat = new pc.StandardMaterial();
+    mat.useLighting = false; // a light source shouldn't be shaded itself
+    mat.diffuse = new pc.Color(0, 0, 0);
+    mat.update();
+    disc.render.meshInstances[0].material = mat;
+    this.app.root.addChild(disc);
+    this.celestial = disc;
+  }
+
+  /** @param {number} hours 0–24, e.g. 6.5 for half past six in the morning */
+  setTimeOfDay(hours) {
+    const t = Number(hours);
+    if (!Number.isFinite(t)) return;
+    this.environmentState.lighting.timeOfDay = Math.min(Math.max(t, 0), 24);
+    this.applyLighting();
+  }
+
+  /** Shadows look good but cost frame rate, which matters most on a headset. */
+  setShadows(enabled) {
+    this.environmentState.lighting.shadows = !!enabled;
+    this.applyLighting();
+  }
+
+  /** Pushes environmentState.lighting onto the light, ambient, disc and sky. */
+  applyLighting() {
+    if (!this.app || !this.sun) return;
+    const { timeOfDay, shadows } = this.environmentState.lighting;
+    const sky = computeSkyLight(timeOfDay);
+
+    // Direction from the scene towards the sun/moon.
+    const e = sky.elevation * pc.math.DEG_TO_RAD;
+    const a = sky.azimuth * pc.math.DEG_TO_RAD;
+    this.celestialDir.set(Math.cos(e) * Math.cos(a), Math.sin(e), Math.cos(e) * Math.sin(a)).normalize();
+
+    // A directional light shines along its entity's -Y axis, so point +Y
+    // at the sun: the light then travels from the sun towards the scene.
+    const up = pc.Vec3.UP;
+    const axis = new pc.Vec3().cross(up, this.celestialDir);
+    const angle = Math.acos(pc.math.clamp(up.dot(this.celestialDir), -1, 1)) * pc.math.RAD_TO_DEG;
+    const q = axis.lengthSq() < 1e-8 ? new pc.Quat() : new pc.Quat().setFromAxisAngle(axis.normalize(), angle);
+    this.sun.setRotation(q);
+
+    this.sun.light.color = new pc.Color(...sky.color);
+    this.sun.light.intensity = sky.intensity;
+    this.sun.light.castShadows = shadows;
+    this.app.scene.ambientLight = new pc.Color(...sky.ambient);
+
+    if (this.environmentState.sky.type === 'dynamic') {
+      const { top, bottom } = computeSkyColors(timeOfDay);
+      this.drawSkyGradient(top, bottom);
+    }
+
+    if (this.celestial) {
+      const mat = this.celestial.render.meshInstances[0].material;
+      const glow = sky.body === 'sun' ? lerp3([1.0, 0.6, 0.3], [1.0, 0.95, 0.75], smoothstep(15, 35, sky.elevation)) : [0.85, 0.88, 0.95];
+      mat.emissive = new pc.Color(...glow);
+      mat.update();
+      const size = sky.body === 'sun' ? 9 : 6;
+      this.celestial.setLocalScale(size, size, size);
+      this.updateCelestialPosition();
+    }
+  }
+
+  /** Keeps the disc a fixed distance from the camera, inside the skybox. */
+  updateCelestialPosition() {
+    if (!this.celestial || !this.camera) return;
+    const p = this.camera.getPosition();
+    const d = 120; // skybox radius is 150 (see createSkyboxEntity)
+    this.celestial.setPosition(p.x + this.celestialDir.x * d, p.y + this.celestialDir.y * d, p.z + this.celestialDir.z * d);
   }
 
   // ------------------------------------------------------------------
@@ -444,8 +713,9 @@ export class AppManager {
   /**
    * @param {number[]} tiling - [u, v] repeat counts across the ground
    *   plane. Higher = smaller, more repeated tiles.
+   * @param {object|null} assetRef - scene-file asset ref, as in setSkyboxImage.
    */
-  setTerrainTexture(source, tiling = [10, 10]) {
+  setTerrainTexture(source, tiling = [10, 10], { assetRef = null } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.app || !this.ground) return reject(new Error('Ground not ready'));
 
@@ -472,14 +742,16 @@ export class AppManager {
         mat.diffuse = new pc.Color(1, 1, 1); // let the texture carry the colour
         mat.diffuseMapTiling = new pc.Vec2(tiling[0], tiling[1]);
         mat.update();
+        this.environmentState.ground = { type: 'texture', asset: assetRef, tiling: [tiling[0], tiling[1]] };
         resolve(texture);
       });
     });
   }
 
   /** Back to a flat colour, no image — undoes setTerrainTexture. */
-  setTerrainColor(color = [0.28, 0.32, 0.38]) {
+  setTerrainColor(color = DEFAULT_GROUND_COLOR) {
     if (!this.ground) return;
+    this.environmentState.ground = { type: 'color', color: rgbToHex(color) };
     const mat = this.ground.render.meshInstances[0].material;
     mat.diffuseMap = null;
     mat.diffuse = new pc.Color(color[0], color[1], color[2]);
@@ -720,24 +992,33 @@ export class AppManager {
   // ------------------------------------------------------------------
   // Interaction (proximity + "E" key)
   //
-  // Any entity can be marked with setInteractable({ label, onInteract }).
+  // Any entity can be marked with setInteractable({ label, action }).
   // Every frame, updateInteractionPrompt() finds the nearest interactable
   // within interactRadius of wherever the character currently is (reusing
   // getCharacterPosition, the same position stepCharacterMovement drives)
   // and reports it via onInteractionPromptChange so the UI can show a
   // "Press E to <label>" hint. Pressing E calls triggerInteraction(), which
-  // fires that entity's own onInteract(assetId) callback — what actually
-  // happens (open a door, pick something up, play a sound) is entirely up
-  // to whoever called setInteractable; the engine only handles "is the
-  // character close enough, and did they press the button".
+  // passes that entity's action (plain data, so it can be saved) to the
+  // handler set with setInteractionHandler — what actually happens is up to
+  // the app; the engine only handles "is the character close enough, and
+  // did they press the button".
   // ------------------------------------------------------------------
 
-  /** Mark `assetId` as something the character can interact with up close. */
-  setInteractable(assetId, { label = 'Interact', onInteract } = {}) {
+  /**
+   * Mark `assetId` as something the character can interact with up close.
+   * `action` is plain data (e.g. { type: 'message', text: 'Hi!' }) so it can
+   * be saved; what each action type does is up to setInteractionHandler.
+   */
+  setInteractable(assetId, { label = 'Interact', action = null } = {}) {
     const record = this.entities.get(assetId);
     if (!record) return false;
-    record.interactable = { label, onInteract: onInteract || null };
+    record.interactable = { label, action };
     return true;
+  }
+
+  /** fn(entityId, action) runs when the player presses E near an interactable. */
+  setInteractionHandler(fn) {
+    this.interactionHandler = fn;
   }
 
   /** Remove the interactable marking (e.g. a "used up" object). */
@@ -791,7 +1072,7 @@ export class AppManager {
     if (!this.activeInteractableId) return false;
     const record = this.entities.get(this.activeInteractableId);
     if (!record?.interactable) return false;
-    record.interactable.onInteract?.(this.activeInteractableId);
+    this.interactionHandler?.(this.activeInteractableId, record.interactable.action);
     return true;
   }
 
@@ -1012,9 +1293,8 @@ export class AppManager {
       scaleFactor: levelToFactor(record.scaleLevel),
       // Absolute world scale, mostly useful for debugging
       worldScale: record.baseScale * levelToFactor(record.scaleLevel),
-      // Label only — the onInteract callback itself isn't UI-serialisable
-      // and shouldn't need to be; the UI just needs to know whether this
-      // selection currently has one and what it's called.
+      // Label only; the UI just needs to know whether this selection
+      // currently has an interaction and what it's called.
       interactable: record.interactable ? { label: record.interactable.label } : null
     };
   }
@@ -1047,11 +1327,13 @@ export class AppManager {
     if (!record) return false;
     const norm = (deg) => ((deg % 360) + 360) % 360;
     record.rotation = [norm(rotation[0]), norm(rotation[1]), norm(rotation[2])];
-    record.entity.setEulerAngles(
+    const q = new pc.Quat().setFromEulerAngles(
       record.rotation[0],
       record.rotation[1],
       record.rotation[2]
     );
+    // User rotation on top of the model's own (see loadGlbAsset).
+    record.entity.setLocalRotation(q.mul(record.baseRotation));
     this.emitTransform(assetId);
     return true;
   }
@@ -1137,7 +1419,18 @@ export class AppManager {
    *   are excluded from the active-player picker.
    */
   loadGlbAsset(assetId, source, position = [0, 0, 0], options = {}) {
-    const { targetSize = 1.5, autoSelect = true, name = assetId, type = 'object' } = options;
+    const {
+      targetSize = 1.5,
+      autoSelect = true,
+      name = assetId,
+      type = 'object',
+      // Scene-file asset ref ({ source, id }), or null for a model that
+      // came from the user's computer and can't be saved yet.
+      assetRef = null,
+      // true when restoring a saved scene: use the saved position as-is,
+      // with no grid snapping, re-scaling, dropping or overlap nudging.
+      exact = false
+    } = options;
     return new Promise((resolve, reject) => {
       if (!this.app) return reject(new Error('PlayCanvas application not ready'));
 
@@ -1165,19 +1458,37 @@ export class AppManager {
         }
 
         const [x, y, z] = position;
-        const snapped = this.snapToGrid(x, z);
-        entity.setPosition(snapped.x, y, snapped.z);
+        if (exact) {
+          entity.setPosition(x, y, z);
+        } else {
+          const snapped = this.snapToGrid(x, z);
+          entity.setPosition(snapped.x, y, snapped.z);
+        }
         this.app.root.addChild(entity);
+
+        // Many models (Sketchfab exports especially) have a rotation and
+        // scale on their root node that makes them stand upright at the
+        // right size. User rotation/scale are applied on top of these,
+        // never instead of them.
+        const baseRotation = entity.getLocalRotation().clone();
+        const intrinsicScale = entity.getLocalScale().x || 1;
 
         this.entities.set(assetId, {
           entity,
-          baseScale: 1,
+          baseRotation,
+          baseScale: intrinsicScale,
           scaleLevel: 0,
           rotation: [0, 0, 0],
           name,
           type,
+          assetRef,
           interactable: null
         });
+
+        if (exact) {
+          if (autoSelect) this.selectEntity(assetId);
+          return resolve(entity);
+        }
 
         if (targetSize > 0) {
           this.normaliseAndGround(assetId, targetSize);
@@ -1212,7 +1523,8 @@ export class AppManager {
       box.halfExtents.z * 2
     );
     if (largest > 0) {
-      record.baseScale = targetSize / largest;
+      // `largest` was measured at the current scale, so scale relative to it.
+      record.baseScale = record.baseScale * (targetSize / largest);
       record.scaleLevel = 0;
       const s = record.baseScale;
       record.entity.setLocalScale(s, s, s);
@@ -1245,6 +1557,201 @@ export class AppManager {
   }
 
   // ------------------------------------------------------------------
+  // Scene save / load
+  //
+  // The scene file format lives in shared/scene/scene.schema.json. Assets
+  // are saved as { source, id } refs, never URLs; the caller supplies a
+  // resolveAssetUrl(ref) function to turn a ref back into a loadable URL.
+  // ------------------------------------------------------------------
+
+  /**
+   * Builds a scene document from what's currently in the world.
+   * @returns {{ scene: object, warnings: string[] }} warnings list anything
+   *   that was left out (e.g. models uploaded from this computer).
+   */
+  serializeScene({ title } = {}) {
+    const warnings = [];
+    const entities = [];
+
+    this.entities.forEach((record, id) => {
+      const name = (record.name || id).slice(0, 60);
+      if (!record.assetRef) {
+        warnings.push(`"${name}" was added from this computer, so it can't be saved yet.`);
+        return;
+      }
+      const p = record.entity.getPosition();
+      const interactable = record.interactable;
+      entities.push({
+        id,
+        name,
+        type: record.type === 'environment' ? 'environment' : 'object',
+        asset: { ...record.assetRef },
+        position: [round4(p.x), round4(p.y), round4(p.z)],
+        rotation: record.rotation.map(round4),
+        baseScale: record.baseScale,
+        scaleLevel: round4(record.scaleLevel),
+        interaction:
+          interactable && interactable.action && record.type !== 'environment'
+            ? { label: interactable.label, action: { ...interactable.action } }
+            : null
+      });
+    });
+
+    const { sky, ground } = this.environmentState;
+    let savedSky = sky;
+    if (sky.type === 'image' && !sky.asset) {
+      warnings.push('The sky picture came from this computer, so it was not saved.');
+      savedSky = { type: 'none' };
+    }
+    let savedGround = ground;
+    if (ground.type === 'texture' && !ground.asset) {
+      warnings.push('The ground picture came from this computer, so it was not saved.');
+      savedGround = { type: 'color', color: rgbToHex(DEFAULT_GROUND_COLOR) };
+    }
+
+    const savedIds = new Set(entities.map((e) => e.id));
+    const player =
+      this.activePlayerId && savedIds.has(this.activePlayerId)
+        ? { entityId: this.activePlayerId, view: this.playerView }
+        : null;
+
+    const scene = {
+      version: CURRENT_SCENE_VERSION,
+      meta: {
+        title: (title || this.sceneMeta.title || 'My world').slice(0, 60),
+        createdAt: this.sceneMeta.createdAt,
+        updatedAt: new Date().toISOString()
+      },
+      environment: {
+        sky: { ...savedSky },
+        ground: { ...savedGround },
+        lighting: { ...this.environmentState.lighting }
+      },
+      entities,
+      player
+    };
+
+    // If this fails it's a bug in the editor, not something the user did.
+    const check = validateScene(scene);
+    if (!check.ok) {
+      throw new Error('Could not save this world:\n' + check.errors.join('\n'));
+    }
+    return { scene, warnings };
+  }
+
+  /** Removes everything the user added and resets the sky, ground and light. */
+  clearScene() {
+    this.clearActivePlayer();
+    this.selectEntity(null);
+    Array.from(this.entities.keys()).forEach((id) => this.removeEntity(id));
+    this.setTerrainColor(DEFAULT_GROUND_COLOR);
+    this.environmentState.lighting = { ...DEFAULT_LIGHTING };
+    this.setDynamicSky(); // also applies the lighting
+    this.activeInteractableId = null;
+    this.onInteractionPromptChange?.(null);
+  }
+
+  /**
+   * Replaces the current world with a saved one.
+   * @param {object} doc - parsed scene file
+   * @param {(ref: {source: string, id: string}) => string|null} resolveAssetUrl
+   * @returns {Promise<{ warnings: string[] }>}
+   */
+  async loadScene(doc, resolveAssetUrl) {
+    const scene = migrateScene(doc);
+    const check = validateScene(scene);
+    if (!check.ok) {
+      throw new Error('This file is not a valid world:\n' + check.errors.join('\n'));
+    }
+
+    const warnings = [];
+    this.clearScene();
+
+    // Sky
+    const { sky, ground } = scene.environment;
+    if (sky.type === 'none') {
+      this.clearSkybox();
+    } else if (sky.type === 'dynamic') {
+      this.environmentState.sky = { type: 'dynamic' }; // drawn by applyLighting below
+    } else if (sky.type === 'gradient') {
+      this.setSkyboxGradient(sky.top, sky.bottom);
+    } else if (sky.type === 'image') {
+      const url = resolveAssetUrl(sky.asset);
+      if (url) {
+        await this.setSkyboxImage(url, { flipV: !!sky.flipV, assetRef: sky.asset }).catch(() =>
+          warnings.push('The sky picture could not be loaded.')
+        );
+      } else {
+        warnings.push('The sky picture is missing.');
+      }
+    }
+
+    // Ground
+    if (ground.type === 'color') {
+      this.setTerrainColor(hexToRgb(ground.color));
+    } else {
+      const url = resolveAssetUrl(ground.asset);
+      if (url) {
+        await this.setTerrainTexture(url, ground.tiling, { assetRef: ground.asset }).catch(() =>
+          warnings.push('The ground picture could not be loaded.')
+        );
+      } else {
+        warnings.push('The ground picture is missing.');
+      }
+    }
+
+    // Sun & moon
+    this.environmentState.lighting = { ...scene.environment.lighting };
+    this.applyLighting();
+
+    // Entities, loaded in parallel; one bad model doesn't stop the rest.
+    const results = await Promise.allSettled(
+      scene.entities.map(async (e) => {
+        const url = resolveAssetUrl(e.asset);
+        if (!url) throw new Error(`"${e.name}" is missing from the library.`);
+        await this.loadGlbAsset(e.id, url, e.position, {
+          name: e.name,
+          type: e.type,
+          assetRef: e.asset,
+          autoSelect: false,
+          exact: true
+        });
+        const record = this.entities.get(e.id);
+        record.baseScale = e.baseScale;
+        this.setEntityRotation(e.id, e.rotation);
+        this.setEntityScaleLevel(e.id, e.scaleLevel);
+        if (e.interaction) {
+          this.setInteractable(e.id, { label: e.interaction.label, action: e.interaction.action });
+        }
+      })
+    );
+    // Models finish loading in any order; put them back in saved order so
+    // saving the same world twice gives the same file.
+    const loaded = new Map();
+    scene.entities.forEach((e) => {
+      if (this.entities.has(e.id)) loaded.set(e.id, this.entities.get(e.id));
+    });
+    this.entities = loaded;
+
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        warnings.push(r.reason?.message || `"${scene.entities[i].name}" could not be loaded.`);
+      }
+    });
+
+    // Player
+    if (scene.player) {
+      this.setPlayerView(scene.player.view);
+      if (!this.setActivePlayer(scene.player.entityId)) {
+        warnings.push('The player object could not be loaded.');
+      }
+    }
+
+    this.sceneMeta = { title: scene.meta.title, createdAt: scene.meta.createdAt };
+    return { warnings };
+  }
+
+  // ------------------------------------------------------------------
   // Cleanup
   // ------------------------------------------------------------------
 
@@ -1266,6 +1773,14 @@ export class AppManager {
     if (this.skybox) {
       this.skybox.destroy();
       this.skybox = null;
+    }
+    if (this.celestial) {
+      this.celestial.destroy();
+      this.celestial = null;
+    }
+    if (this.gradientTexture) {
+      this.gradientTexture.destroy();
+      this.gradientTexture = null;
     }
     if (this.app) {
       if (this.updateHandler) this.app.off('update', this.updateHandler);

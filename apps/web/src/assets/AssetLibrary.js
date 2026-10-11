@@ -31,3 +31,8 @@ export const ENVIRONMENTS = [
 export function getLibraryFor(tab) {
   return tab === 'environments' ? ENVIRONMENTS : OBJECTS;
 }
+
+/** Looks up a built-in library item by id, across both tabs. */
+export function getAssetById(id) {
+  return [...OBJECTS, ...ENVIRONMENTS].find((item) => item.id === id) || null;
+}

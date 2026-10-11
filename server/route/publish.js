@@ -8,7 +8,6 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { validateScene } from '../../shared/scene/validateScene.js';
 
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCENES_DIR = path.resolve(__dirname, '..', 'data', 'scenes');
 
@@ -22,20 +21,14 @@ function makeCode() {
   return Array.from(bytes, (b) => ALPHABET[b % ALPHABET.length]).join('');
 }
 
-// Shape check only. Tighten this once the scene schema is written down.
-function validateScene(scene) {
-  if (!scene || typeof scene !== 'object' || Array.isArray(scene)) return 'Scene must be an object.';
-  if (!Number.isInteger(scene.version)) return 'Scene needs an integer "version".';
-  if (!Array.isArray(scene.entities)) return 'Scene needs an "entities" array.';
-  return null;
-}
-
 const router = express.Router();
 
 router.post('/', async (req, res, next) => {
   try {
-    const problem = validateScene(req.body);
-    if (problem) return res.status(400).json({ error: problem });
+    const result = validateScene(req.body);
+    if (!result.ok) {
+      return res.status(400).json({ error: 'This world could not be published.', details: result.errors });
+    }
 
     await fs.mkdir(SCENES_DIR, { recursive: true });
 

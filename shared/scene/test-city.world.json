@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "meta": {
+    "title": "Test City",
+    "createdAt": "2026-10-11T12:32:19.614Z",
+    "updatedAt": "2026-10-11T12:36:09.100Z"
+  },
+  "environment": {
+    "sky": {
+      "type": "none"
+    },
+    "ground": {
+      "type": "color",
+      "color": "#475261"
+    }
+  },
+  "entities": [
+    {
+      "id": "env_1791721984064",
+      "name": "City",
+      "type": "environment",
+      "asset": {
+        "source": "builtin",
+        "id": "city"
+      },
+      "position": [
+        0,
+        0.736,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "baseScale": 1,
+      "scaleLevel": 0,
+      "interaction": null
+    },
+    {
+      "id": "obj_1791721999769",
+      "name": "Man",
+      "type": "object",
+      "asset": {
+        "source": "builtin",
+        "id": "person"
+      },
+      "position": [
+        0,
+        0.8,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "baseScale": 0.0080730844364852,
+      "scaleLevel": -27,
+      "interaction": null
+    },
+    {
+      "id": "obj_1791722002886",
+      "name": "Man",
+      "type": "object",
+      "asset": {
+        "source": "builtin",
+        "id": "person"
+      },
+      "position": [
+        -39,
+        0.0003,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "baseScale": 0.0080730844364852,
+      "scaleLevel": 0,
+      "interaction": null
+    }
+  ],
+  "player": null
+}
