@@ -6,9 +6,9 @@ import React, { useRef } from 'react';
  * Saving and opening are done in App.jsx (via AppManager.serializeScene /
  * loadScene); this component only collects the input. `lastAutosave` is the
  * time of the last automatic save to this browser, shown so it's clear work
- * is being kept.
+ * is being kept. "View in VR" opens ViewInVRDialog (via onViewInVR).
  */
-export function ScenePanel({ title, onTitleChange, onNew, onSave, onOpen, lastAutosave, isBusy }) {
+export function ScenePanel({ title, onTitleChange, onNew, onSave, onOpen, onViewInVR, lastAutosave, isBusy }) {
   const fileInputRef = useRef(null);
 
   const handleFileChange = (e) => {
@@ -36,6 +36,9 @@ export function ScenePanel({ title, onTitleChange, onNew, onSave, onOpen, lastAu
       </button>
       <button style={buttonStyle} onClick={() => fileInputRef.current?.click()} disabled={isBusy}>
         Open world
+      </button>
+      <button style={vrButtonStyle} onClick={onViewInVR} disabled={isBusy}>
+        🥽 View in VR
       </button>
       <input
         ref={fileInputRef}
@@ -70,7 +73,7 @@ const panelStyle = {
 };
 
 const inputStyle = {
-  width: 160,
+  width: 130,
   padding: '5px 8px',
   borderRadius: 4,
   border: '1px solid rgba(255,255,255,0.25)',
@@ -86,7 +89,16 @@ const buttonStyle = {
   background: 'rgba(255,255,255,0.08)',
   color: '#eee',
   cursor: 'pointer',
-  fontSize: 12
+  fontSize: 12,
+  whiteSpace: 'nowrap'
+};
+
+const vrButtonStyle = {
+  ...buttonStyle,
+  border: '1px solid #3B82F6',
+  background: '#2563EB',
+  color: '#fff',
+  fontWeight: 600
 };
 
 const statusStyle = { marginLeft: 4, color: '#9aa4c2', whiteSpace: 'nowrap' };

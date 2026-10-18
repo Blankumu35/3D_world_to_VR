@@ -6,7 +6,8 @@ import { EnvironmentPanel } from './components/Editor/EnvironmentPanel';
 import { ScenePanel } from './components/Editor/ScenePanel';
 import { RestorePrompt } from './components/Editor/RestorePrompt';
 import { SidePanel } from './components/Editor/SidePanel';
-import { getAssetById } from './assets/AssetLibrary';
+import { ViewInVRDialog } from './components/Editor/ViewInVRDialog';
+import { resolveAssetUrl } from './services/publish';
 import {
   writeAutosave,
   readAutosave,
@@ -46,6 +47,8 @@ export function App() {
   const [skyType, setSkyType] = useState('dynamic');
   // Which tab of the right-hand SidePanel is open: 'world' | 'object' | 'player'.
   const [sideTab, setSideTab] = useState('world');
+  // "View in VR" dialog (see components/Editor/ViewInVRDialog).
+  const [vrDialogOpen, setVrDialogOpen] = useState(false);
 
   // ---- Autosave state ----
   // restoreOffer: the autosaved { savedAt, scene } waiting for the user to
@@ -350,13 +353,8 @@ export function App() {
 
   // ---- Save / open / new (see components/Editor/ScenePanel) ----
 
-  // Turns a saved { source, id } ref back into a URL the engine can load.
-  // Only built-in library items for now; uploads and generated models will
-  // resolve through the server once it stores them.
-  const resolveAssetUrl = (ref) => {
-    if (ref.source === 'builtin') return getAssetById(ref.id)?.url ?? null;
-    return null;
-  };
+  // resolveAssetUrl (services/publish.js) turns a saved { source, id } ref
+  // back into a URL; the VR viewer uses the same function.
 
   // Shared by "Open world" and "Carry on": replaces the current world with
   // a saved one and brings the React state back in line with the engine.
@@ -488,6 +486,7 @@ export function App() {
         onNew={handleNewScene}
         onSave={handleSaveScene}
         onOpen={handleOpenScene}
+        onViewInVR={() => setVrDialogOpen(true)}
         lastAutosave={lastAutosave}
         isBusy={isImporting || !!restoreOffer}
       />
@@ -550,6 +549,12 @@ export function App() {
           }
         ]}
       />
+      {vrDialogOpen && (
+        <ViewInVRDialog
+          getScene={() => engineRef.current.serializeScene({ title: worldTitle })}
+          onClose={() => setVrDialogOpen(false)}
+        />
+      )}
       {restoreOffer && (
         <RestorePrompt
           title={restoreOffer.scene?.meta?.title || DEFAULT_TITLE}

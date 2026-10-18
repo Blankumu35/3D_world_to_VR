@@ -151,6 +151,11 @@ export const GRID_SIZE = 1;
  */
 export const CHARACTER_RADIUS = 0.4;
 
+const SELECTION_COLOR = new pc.Color(1, 0.78, 0.2);
+const RAY_COLOR_OK = new pc.Color(0.35, 0.8, 1);
+const RAY_COLOR_BAD = new pc.Color(1, 0.35, 0.35);
+const RAY_COLOR_IDLE = new pc.Color(1, 1, 1);
+
 /**
  * AppManager
  * Owns the PlayCanvas application and exposes an imperative API the React
@@ -159,10 +164,17 @@ export const CHARACTER_RADIUS = 0.4;
  * transforms through the setters below.
  */
 export class AppManager {
-  constructor(canvasElement, callbacks = {}) {
+  /**
+   * @param {HTMLCanvasElement} canvasElement
+   * @param {object} callbacks - onSelectionChange, onTransformChange, ...
+   * @param {{ readOnly?: boolean }} options - readOnly: the VR viewer. You
+   *   can look around and walk, but clicking never selects or moves objects.
+   */
+  constructor(canvasElement, callbacks = {}, options = {}) {
     this.canvas = canvasElement;
     this.app = null;
     this.camera = null;
+    this.readOnly = !!options.readOnly;
 
     /**
      * @type {Map<string, {
@@ -255,6 +267,24 @@ export class AppManager {
     this.activeInteractableId = null;
     this.onInteractionPromptChange = callbacks.onInteractionPromptChange || null;
 
+    // VR (see the XR section). The camera is moved under xrRig while a
+    // headset session runs: the headset moves the camera *inside* the rig,
+    // and teleporting / snap turning move the rig itself.
+    this.xrRig = null;
+    this.teleportMarker = null;
+    this.xrHiddenId = null;
+    this.inVR = false;
+    this.onXRChange = callbacks.onXRChange || null;
+    this.xrState = {
+      aiming: null,        // the XrInputSource currently aiming, or null
+      aimingBy: null,      // 'trigger' | 'stick'
+      target: null,        // pc.Vec3 where the ray ends
+      targetValid: false,
+      turnArmed: new Map() // inputSource -> false until the stick re-centres
+    };
+    this.teleportRange = 15;
+    this.snapTurnDegrees = 30;
+
     this.init();
   }
 
@@ -331,7 +361,10 @@ export class AppManager {
     this.attachPointerHandlers();
     this.attachInteractionKey();
 
+    this.setupXR();
+
     this.updateHandler = (dt) => {
+      this.updateXR();
       this.stepCharacterMovement(dt);
       this.drawSelectionOutline();
       this.updateInteractionPrompt();
@@ -352,6 +385,8 @@ export class AppManager {
 
   updateCamera() {
     if (!this.camera) return;
+    // In VR the headset drives the camera; see the XR section.
+    if (this.isInVR()) return;
     const pitch = this.orbit.pitch * pc.math.DEG_TO_RAD;
     const yaw = this.orbit.yaw * pc.math.DEG_TO_RAD;
 
@@ -835,6 +870,7 @@ export class AppManager {
    * immediately rather than requiring viewFromCenter() first.
    */
   stepCharacterMovement(dt) {
+    if (this.isInVR()) return; // VR moves by teleport instead
     const input = this.moveInput;
     const isMoving = input.forward || input.backward || input.left || input.right;
     if (!isMoving) return;
@@ -1106,7 +1142,8 @@ export class AppManager {
       this.pointer.lastX = e.clientX;
       this.pointer.lastY = e.clientY;
 
-      const hitId = this.pickEntityAt(x, y);
+      // The viewer never selects: every drag just looks around.
+      const hitId = this.readOnly ? null : this.pickEntityAt(x, y);
 
       if (hitId) {
         this.selectEntity(hitId);
@@ -1160,7 +1197,7 @@ export class AppManager {
     };
 
     this.onPointerUp = (e) => {
-      if (this.pointer.mode === 'orbit' && !this.pointer.moved) {
+      if (this.pointer.mode === 'orbit' && !this.pointer.moved && !this.readOnly) {
         this.selectEntity(null);
       }
       this.pointer.down = false;
@@ -1263,11 +1300,14 @@ export class AppManager {
     const record = this.entities.get(this.selectedId);
     if (!record) return;
     const box = this.getWorldAabb(record.entity);
-    if (!box || !this.app.drawWireAlignedBox) return;
+    if (!box) return;
 
+    // app.drawWireAlignedBox was removed in PlayCanvas 2.x; the scene's
+    // immediate renderer still has it.
+    const scene = this.app.scene;
     const min = new pc.Vec3().copy(box.center).sub(box.halfExtents);
     const max = new pc.Vec3().copy(box.center).add(box.halfExtents);
-    this.app.drawWireAlignedBox(min, max, new pc.Color(1, 0.78, 0.2));
+    scene.immediate.drawWireAlignedBox(min, max, SELECTION_COLOR, true, scene.defaultDrawLayer, null);
   }
 
   // ------------------------------------------------------------------
@@ -1537,23 +1577,309 @@ export class AppManager {
   // XR
   // ------------------------------------------------------------------
 
+  /**
+   * Creates the VR camera rig and teleport marker, and listens for the
+   * headset session starting and ending. Called once from init().
+   *
+   * How VR movement works:
+   * - The headset sets the camera's *local* position/rotation every frame.
+   *   PlayCanvas treats the camera's parent as the play space, so we park
+   *   the camera under xrRig and move the rig to move the player.
+   * - Teleport: point a controller at the floor and hold the trigger (or
+   *   push the thumbstick forward), release to jump there.
+   * - Snap turn: push the thumbstick left/right to turn 30°.
+   */
+  setupXR() {
+    const xr = this.app.xr;
+    if (!xr) return;
+
+    this.xrRig = new pc.Entity('XRRig', this.app);
+    this.app.root.addChild(this.xrRig);
+
+    // Flat glowing disc that shows where you'll land. Unlit so it's easy
+    // to see at night, and it never casts a shadow.
+    this.teleportMarker = new pc.Entity('TeleportMarker', this.app);
+    this.teleportMarker.addComponent('render', {
+      type: 'cylinder',
+      castShadows: false,
+      receiveShadows: false
+    });
+    this.teleportMarkerMat = new pc.StandardMaterial();
+    this.teleportMarkerMat.useLighting = false;
+    this.teleportMarkerMat.emissive = new pc.Color(0.35, 0.8, 1);
+    this.teleportMarkerMat.diffuse = new pc.Color(0, 0, 0);
+    this.teleportMarkerMat.opacity = 0.75;
+    this.teleportMarkerMat.blendType = pc.BLEND_NORMAL;
+    this.teleportMarkerMat.update();
+    this.teleportMarker.render.meshInstances[0].material = this.teleportMarkerMat;
+    this.teleportMarker.setLocalScale(0.7, 0.02, 0.7);
+    this.teleportMarker.enabled = false;
+    this.app.root.addChild(this.teleportMarker);
+
+    this.onXRStart = () => this.handleXRStart();
+    this.onXREnd = () => this.handleXREnd();
+    this.onXRAvailable = () => this.onXRChange?.({ inVR: this.isInVR(), available: this.isVRAvailable() });
+    xr.on('start', this.onXRStart);
+    xr.on('end', this.onXREnd);
+    xr.on('available', this.onXRAvailable);
+
+    // Trigger held = aiming, trigger released = jump.
+    this.onXRSelectStart = (inputSource) => {
+      if (inputSource.targetRayMode !== pc.XRTARGETRAY_POINTER) return;
+      this.xrState.aiming = inputSource;
+      this.xrState.aimingBy = 'trigger';
+    };
+    this.onXRSelectEnd = (inputSource) => {
+      if (this.xrState.aiming !== inputSource || this.xrState.aimingBy !== 'trigger') return;
+      this.finishTeleport();
+    };
+    xr.input.on('selectstart', this.onXRSelectStart);
+    xr.input.on('selectend', this.onXRSelectEnd);
+  }
+
+  /**
+   * True while a headset session is running. Tracked with our own flag
+   * rather than app.xr.active, which is still true while the 'end' event
+   * runs — handleXREnd needs updateCamera() to work again by then.
+   */
+  isInVR() {
+    return this.inVR;
+  }
+
+  isVRAvailable() {
+    return !!(this.app && this.app.xr && this.app.xr.isAvailable(pc.XRTYPE_VR));
+  }
+
+  /**
+   * Starts a headset session. Must be called from a click/tap handler —
+   * browsers refuse to start VR otherwise.
+   * @returns {boolean} false if VR isn't available here.
+   */
   enterVR() {
     const cameraComponent = this.camera?.camera;
     if (!this.app || !cameraComponent) return false;
-    if (!this.app.xr || !this.app.xr.isAvailable(pc.XRTYPE_VR)) return false;
+    if (!this.isVRAvailable()) return false;
 
     // LOCALFLOOR puts the origin at floor level, so objects placed at y = 0
     // appear on the ground rather than at head height.
     this.app.xr.start(cameraComponent, pc.XRTYPE_VR, pc.XRSPACE_LOCALFLOOR, {
       callback: (err) => {
-        if (err) console.error('Failed to start XR session:', err);
+        if (err) {
+          console.error('Failed to start XR session:', err);
+          this.onXRChange?.({ inVR: false, available: this.isVRAvailable(), error: err.message || String(err) });
+        }
       }
     });
     return true;
   }
 
-  isVRAvailable() {
-    return !!(this.app && this.app.xr && this.app.xr.isAvailable(pc.XRTYPE_VR));
+  exitVR() {
+    if (this.isInVR()) this.app.xr.end();
+  }
+
+  /**
+   * Where you stand when the headset goes on: on the world's player object
+   * if it has one (the object is hidden so you're not standing inside it),
+   * otherwise under the desktop camera. Either way you face the same way
+   * the desktop camera was facing.
+   */
+  getVRStartPose() {
+    const yaw = this.orbit.yaw;
+    const record = this.activePlayerId && this.entities.get(this.activePlayerId);
+    if (record) {
+      const box = this.getWorldAabb(record.entity);
+      const p = box ? box.center : record.entity.getPosition();
+      return { x: p.x, z: p.z, yaw, hideId: this.activePlayerId };
+    }
+    const p = this.camera.getPosition();
+    return { x: p.x, z: p.z, yaw, hideId: null };
+  }
+
+  handleXRStart() {
+    const pose = this.getVRStartPose();
+    this.inVR = true;
+
+    this.xrRig.setPosition(pose.x, 0, pose.z);
+    this.xrRig.setEulerAngles(0, pose.yaw, 0);
+    this.camera.reparent(this.xrRig);
+    this.camera.setLocalPosition(0, 0, 0);
+    this.camera.setLocalRotation(pc.Quat.IDENTITY);
+
+    this.xrHiddenId = pose.hideId;
+    this.xrStartPoint = { x: pose.x, z: pose.z };
+    if (pose.hideId) this.entities.get(pose.hideId).entity.enabled = false;
+
+    // The selection box would follow you around the world otherwise.
+    this.selectEntity(null);
+    this.resetTeleportAim();
+    this.onXRChange?.({ inVR: true, available: true });
+  }
+
+  handleXREnd() {
+    // Back to the desktop camera, standing where the headset last was.
+    const head = this.camera.getPosition().clone();
+    const forward = this.camera.forward.clone();
+    this.inVR = false;
+    this.camera.reparent(this.app.root);
+
+    if (this.xrHiddenId && this.entities.has(this.xrHiddenId)) {
+      // You were the character in VR, so it ends up where you ended up.
+      const entity = this.entities.get(this.xrHiddenId).entity;
+      const p = entity.getPosition();
+      entity.setPosition(
+        p.x + (head.x - this.xrStartPoint.x),
+        p.y,
+        p.z + (head.z - this.xrStartPoint.z)
+      );
+      entity.enabled = true;
+    }
+    this.xrHiddenId = null;
+    this.resetTeleportAim();
+
+    if (!this.activePlayerId) {
+      this.insideTarget = new pc.Vec3(head.x, Math.max(head.y, 1.6), head.z);
+      // yaw convention: facing = (-sin yaw, 0, -cos yaw)
+      this.orbit.yaw = Math.atan2(-forward.x, -forward.z) * pc.math.RAD_TO_DEG;
+      this.orbit.pitch = 0;
+    }
+    this.updateCamera();
+    this.onXRChange?.({ inVR: false, available: this.isVRAvailable() });
+  }
+
+  resetTeleportAim() {
+    this.xrState.aiming = null;
+    this.xrState.aimingBy = null;
+    this.xrState.target = null;
+    this.xrState.targetValid = false;
+    if (this.teleportMarker) this.teleportMarker.enabled = false;
+  }
+
+  /**
+   * Follows a controller's pointing ray to the floor (y = 0). Returns where
+   * it lands and whether you're allowed to stand there: not too far away,
+   * not inside a placed object, and not through one.
+   */
+  castTeleportRay(inputSource) {
+    const origin = inputSource.getOrigin();
+    const dir = inputSource.getDirection();
+    const head = this.camera.getPosition();
+
+    let hitT = Infinity;
+    let valid = false;
+    if (dir.y < -0.02) {
+      hitT = -origin.y / dir.y;
+      const x = origin.x + dir.x * hitT;
+      const z = origin.z + dir.z * hitT;
+      const dx = x - head.x;
+      const dz = z - head.z;
+      valid = dx * dx + dz * dz <= this.teleportRange * this.teleportRange;
+    }
+
+    // Stop the ray at the first object in the way.
+    const ray = new pc.Ray(origin, dir);
+    const hitPoint = new pc.Vec3();
+    this.getObstacleBoxes(this.xrHiddenId).forEach((box) => {
+      if (box.intersectsRay(ray, hitPoint)) {
+        const t = hitPoint.distance(origin);
+        if (t < hitT) {
+          hitT = t;
+          valid = false;
+        }
+      }
+    });
+
+    const length = Number.isFinite(hitT) ? hitT : 4;
+    const end = new pc.Vec3().copy(dir).mulScalar(length).add(origin);
+    if (valid && this.isPositionBlocked(end.x, end.z, this.xrHiddenId)) valid = false;
+    return { end, onFloor: Number.isFinite(hitT) && end.y < 0.01, valid };
+  }
+
+  /** Per-frame VR work: pointer rays, teleport aiming and snap turning. */
+  updateXR() {
+    if (!this.isInVR()) return;
+    const state = this.xrState;
+
+    this.app.xr.input.inputSources.forEach((src) => {
+      if (src.targetRayMode !== pc.XRTARGETRAY_POINTER) return;
+      const axes = src.gamepad?.axes || [];
+      const stickX = axes[pc.XRPAD_STICK_X] || 0;
+      const stickY = axes[pc.XRPAD_STICK_Y] || 0;
+
+      // Snap turn: fire once when pushed past 0.7, then wait for the stick
+      // to come back to the middle before turning again.
+      const armed = state.turnArmed.get(src) !== false;
+      if (armed && Math.abs(stickX) > 0.7 && Math.abs(stickX) > Math.abs(stickY)) {
+        this.snapTurn(stickX > 0 ? -this.snapTurnDegrees : this.snapTurnDegrees);
+        state.turnArmed.set(src, false);
+      } else if (!armed && Math.abs(stickX) < 0.3) {
+        state.turnArmed.set(src, true);
+      }
+
+      // Stick forward = aim, let go = jump (the trigger works too).
+      if (!state.aiming && stickY < -0.7) {
+        state.aiming = src;
+        state.aimingBy = 'stick';
+      } else if (state.aiming === src && state.aimingBy === 'stick' && stickY > -0.3) {
+        this.finishTeleport();
+      }
+
+      // Every controller shows a short white ray; the aiming one shows the
+      // full ray, blue where you can land and red where you can't.
+      if (state.aiming === src) {
+        const hit = this.castTeleportRay(src);
+        state.target = hit.end;
+        state.targetValid = hit.valid;
+        this.app.drawLine(src.getOrigin(), hit.end, hit.valid ? RAY_COLOR_OK : RAY_COLOR_BAD, false);
+        if (hit.onFloor) {
+          this.teleportMarker.enabled = true;
+          this.teleportMarker.setPosition(hit.end.x, 0.01, hit.end.z);
+          this.teleportMarkerMat.emissive = hit.valid ? RAY_COLOR_OK : RAY_COLOR_BAD;
+          this.teleportMarkerMat.update();
+        } else {
+          this.teleportMarker.enabled = false;
+        }
+      } else {
+        const end = new pc.Vec3().copy(src.getDirection()).mulScalar(0.5).add(src.getOrigin());
+        this.app.drawLine(src.getOrigin(), end, RAY_COLOR_IDLE, false);
+      }
+    });
+
+    // Controller unplugged / switched to hands mid-aim.
+    if (state.aiming && !this.app.xr.input.inputSources.includes(state.aiming)) {
+      this.resetTeleportAim();
+    }
+  }
+
+  finishTeleport() {
+    const { target, targetValid } = this.xrState;
+    if (target && targetValid) this.teleportTo(target.x, target.z);
+    this.resetTeleportAim();
+  }
+
+  /**
+   * Moves the play space so your head ends up above (x, z). The rig moves
+   * by the head's offset, not to (x, z) itself, because you may have
+   * walked around inside your real room.
+   */
+  teleportTo(x, z) {
+    if (!this.isInVR()) return;
+    const head = this.camera.getPosition();
+    const rig = this.xrRig.getPosition();
+    this.xrRig.setPosition(rig.x + (x - head.x), 0, rig.z + (z - head.z));
+  }
+
+  /** Turns the play space around your head (positive = left). */
+  snapTurn(degrees) {
+    if (!this.isInVR()) return;
+    const head = this.camera.getPosition().clone();
+    const rig = this.xrRig.getPosition().clone();
+    const turn = new pc.Quat().setFromEulerAngles(0, degrees, 0);
+
+    // Rotate the rig's offset from the head, so the head stays put.
+    const offset = new pc.Vec3().sub2(rig, head);
+    turn.transformVector(offset, offset);
+    this.xrRig.setPosition(head.x + offset.x, 0, head.z + offset.z);
+    this.xrRig.setRotation(new pc.Quat().mul2(turn, this.xrRig.getRotation()));
   }
 
   // ------------------------------------------------------------------
@@ -1781,6 +2107,14 @@ export class AppManager {
     if (this.gradientTexture) {
       this.gradientTexture.destroy();
       this.gradientTexture = null;
+    }
+    if (this.app?.xr && this.onXRStart) {
+      if (this.app.xr.active) this.app.xr.end();
+      this.app.xr.off('start', this.onXRStart);
+      this.app.xr.off('end', this.onXREnd);
+      this.app.xr.off('available', this.onXRAvailable);
+      this.app.xr.input.off('selectstart', this.onXRSelectStart);
+      this.app.xr.input.off('selectend', this.onXRSelectEnd);
     }
     if (this.app) {
       if (this.updateHandler) this.app.off('update', this.updateHandler);
