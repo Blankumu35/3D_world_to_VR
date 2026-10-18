@@ -1,12 +1,15 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Canvas3D } from './components/Editor/Canvas3D';
 import { AssetLibraryPanel } from './components/Editor/AssetLibraryPanel';
 import { TransformPanel } from './components/Editor/TransformPanel';
+import { SceneListPanel } from './components/Editor/SceneListPanel';
 import { EnvironmentPanel } from './components/Editor/EnvironmentPanel';
 import { ScenePanel } from './components/Editor/ScenePanel';
 import { RestorePrompt } from './components/Editor/RestorePrompt';
 import { SidePanel } from './components/Editor/SidePanel';
 import { ViewInVRDialog } from './components/Editor/ViewInVRDialog';
+import { PromptPanel } from './components/Generator/PromptPanel';
+import { generatedModelUrl } from './services/generate';
 import { resolveAssetUrl } from './services/publish';
 import {
   writeAutosave,
@@ -33,11 +36,15 @@ export function App() {
   const [isImporting, setIsImporting] = useState(false);
   const [selection, setSelection] = useState(null);
 
-  // Objects (not environments) that exist right now, for the "choose your
-  // player" dropdown — kept in React state rather than re-querying the
-  // engine each render, since AppManager doesn't emit a general "entities
-  // changed" event.
-  const [placedObjects, setPlacedObjects] = useState([]); // [{ id, name }]
+  // Everything in the world, for the "Things" list. AppManager pushes a
+  // fresh copy whenever something is added, removed, renamed or becomes
+  // the player (see setEntitiesChangeHandler), so this never goes stale.
+  const [sceneItems, setSceneItems] = useState([]); // AppManager.listSceneItems()
+  // Objects (not environments), for the "choose your player" dropdown.
+  const placedObjects = useMemo(
+    () => sceneItems.filter((i) => i.type !== 'environment').map(({ id, name }) => ({ id, name })),
+    [sceneItems]
+  );
   const [playerEntityId, setPlayerEntityId] = useState(null);
   const [playerView, setPlayerView] = useState('third-person');
   const [worldTitle, setWorldTitle] = useState(DEFAULT_TITLE);
@@ -82,6 +89,7 @@ export function App() {
     // etc.) — wiring it here, right where engineRef itself is captured,
     // means Canvas3D never needs to know this feature exists.
     engineInstance.setInteractionPromptHandler(setInteractionPrompt);
+    engineInstance.setEntitiesChangeHandler(setSceneItems);
     // Interactions are saved as data ({ type, ... }); this decides what each
     // type does when the player presses E.
     engineInstance.setInteractionHandler((id, action) => {
@@ -185,7 +193,7 @@ export function App() {
   // Shared by: library-card click, library-card drag-drop onto the canvas,
   // and the "upload your own" file/URL form — all three go through the same
   // engine call so objects and environments behave consistently everywhere.
-  const handleAddAsset = async ({ id, source, name, type }, screenPos) => {
+  const handleAddAsset = async ({ id, source, name, type, assetRef: givenRef }, screenPos) => {
     if (!engineRef.current) return;
 
     setIsImporting(true);
@@ -200,7 +208,8 @@ export function App() {
       // are stored on the entity so the player picker can list it.
       // Library items carry an `id`, which is what a saved scene stores.
       // Uploads have none yet, so they can be placed but not saved.
-      const assetRef = id ? { source: 'builtin', id } : null;
+      // Generated models pass their own ref ({ source: 'generated', id }).
+      const assetRef = givenRef ?? (id ? { source: 'builtin', id } : null);
       const loadOptions = isEnvironment
         ? { targetSize: 0, autoSelect: false, name, type: 'environment', assetRef }
         : { name, type: 'object', assetRef };
@@ -212,8 +221,6 @@ export function App() {
         // environment, looking around from inside it rather than at it
         // from outside. Placed objects don't move the camera.
         engineRef.current.viewFromCenter(assetId);
-      } else {
-        setPlacedObjects((prev) => [...prev, { id: assetId, name }]);
       }
 
       console.log(`Successfully added ${type}: ${name}`);
@@ -224,6 +231,16 @@ export function App() {
       setIsImporting(false);
     }
   };
+
+  // A model made by PromptPanel (or picked again from its "You made" list).
+  // It's stored on the server, so it can be saved, published and seen in VR.
+  const handleGeneratedModel = ({ assetId, name }) =>
+    handleAddAsset({
+      source: generatedModelUrl(assetId),
+      name,
+      type: 'object',
+      assetRef: { source: 'generated', id: assetId }
+    });
 
   // Dropped from the AssetLibraryPanel onto the canvas
   const handleDropAsset = (asset, screenPos) => {
@@ -267,8 +284,17 @@ export function App() {
   const handleDelete = withSelection((engine, id) => {
     engine.removeEntity(id); // also exits player mode if `id` was the player
     setSelection(null);
-    setPlacedObjects((prev) => prev.filter((o) => o.id !== id));
   });
+
+  const handleRename = withSelection((engine, id, name) => engine.renameEntity(id, name));
+
+  // ---- "Things" list (see components/Editor/SceneListPanel) ----
+
+  // Selecting opens the edit controls in the same tab (via onSelectionChange).
+  const handleSelectItem = (id) => engineRef.current?.selectEntity(id);
+  const handleFocusItem = (id) => engineRef.current?.focusOn(id);
+  // "← All things": deselect, which shows the list again.
+  const handleBackToList = () => engineRef.current?.selectEntity(null);
 
   // ---- Environment: skybox + terrain (see components/Editor/EnvironmentPanel) ----
 
@@ -366,7 +392,6 @@ export function App() {
     try {
       const { warnings } = await engine.loadScene(doc, resolveAssetUrl);
       setSelection(null);
-      setPlacedObjects(engine.listPlayableEntities());
       setPlayerView(engine.playerView);
       setWorldTitle(engine.sceneMeta.title);
       setLighting({ ...engine.environmentState.lighting });
@@ -422,7 +447,6 @@ export function App() {
     engine.clearScene();
     engine.sceneMeta = { title: DEFAULT_TITLE, createdAt: new Date().toISOString() };
     setSelection(null);
-    setPlacedObjects([]);
     setWorldTitle(DEFAULT_TITLE);
     setLighting({ ...engine.environmentState.lighting });
     setSkyType(engine.environmentState.sky.type);
@@ -480,6 +504,7 @@ export function App() {
         onPlayerChange={handlePlayerChange}
       />
       <AssetLibraryPanel onAddAsset={handleAddAsset} isImporting={isImporting} />
+      <PromptPanel onCreated={handleGeneratedModel} disabled={isImporting || !!restoreOffer} />
       <ScenePanel
         title={worldTitle}
         onTitleChange={setWorldTitle}
@@ -491,7 +516,7 @@ export function App() {
         isBusy={isImporting || !!restoreOffer}
       />
       <CharacterControls onMoveInputChange={handleMoveInputChange} />
-      {/* Right-hand panel: World / Object / Player as tabs, so only one set
+      {/* Right-hand panel: World / Things / Player as tabs, so only one set
           of controls shows at a time and nothing overlaps. */}
       <SidePanel
         activeTab={sideTab}
@@ -517,12 +542,16 @@ export function App() {
             )
           },
           {
+            // The list of everything in the world; picking something
+            // (here or in the 3D view) swaps the list for its controls.
             id: 'object',
-            label: '🎯 Object',
+            label: '🧸 Things',
             dot: !!selection,
-            content: (
+            content: selection ? (
               <TransformPanel
                 selection={selection}
+                onRename={handleRename}
+                onBack={handleBackToList}
                 onPositionChange={handlePositionChange}
                 onRotationChange={handleRotationChange}
                 onScaleLevelChange={handleScaleLevelChange}
@@ -530,6 +559,8 @@ export function App() {
                 onFocus={handleFocus}
                 onDelete={handleDelete}
               />
+            ) : (
+              <SceneListPanel items={sceneItems} onSelect={handleSelectItem} onFocus={handleFocusItem} />
             )
           },
           {

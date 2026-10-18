@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { GRID_SIZE } from '../../playcanvas/AppManager';
 import {
   firstSectionStyle,
@@ -17,14 +17,17 @@ import {
 } from './panelStyles';
 
 /**
- * TransformPanel ("Object" tab of SidePanel)
- * Controlled UI for the selected object's size, rotation and position.
+ * TransformPanel ("Things" tab of SidePanel, when something is selected)
+ * Controlled UI for the selected object's name, size, rotation and position.
+ * "All things" goes back to the list (SceneListPanel) by deselecting.
  * Junior mode: large slider thumbs and plain words, everything the child
  * needs and nothing more. Values flow down from App state; every change
  * calls back up so the engine remains the single source of truth.
  */
 export function TransformPanel({
   selection,
+  onRename,
+  onBack,
   onPositionChange,
   onRotationChange,
   onScaleLevelChange,
@@ -66,8 +69,16 @@ export function TransformPanel({
     <div>
       <style>{sliderCss}</style>
 
-      {/* ---- Size ---- */}
+      {/* ---- Which thing, and its name ---- */}
       <div style={firstSectionStyle}>
+        <button style={backButtonStyle} onClick={onBack}>
+          ← All things
+        </button>
+        <NameField key={selection.id} name={selection.name} type={selection.type} onRename={onRename} />
+      </div>
+
+      {/* ---- Size ---- */}
+      <div style={sectionStyle}>
         <div style={{ ...rowStyle, justifyContent: 'space-between', marginBottom: '8px' }}>
           <span style={{ ...sectionLabelStyle, margin: 0 }}>Size</span>
           <span style={{ fontSize: '12px', color: MUTED }}>
@@ -154,6 +165,43 @@ export function TransformPanel({
   );
 }
 
+/**
+ * Name box. Keeps its own text while typing (so spaces at the end aren't
+ * trimmed away mid-word) and saves it on Enter or when you click away.
+ * Keyed on the selected id, so picking another thing starts fresh.
+ */
+function NameField({ name, type, onRename }) {
+  const [text, setText] = useState(name || '');
+  useEffect(() => setText(name || ''), [name]);
+
+  const commit = () => {
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (clean && clean !== name) onRename(clean);
+    else setText(name || ''); // empty or unchanged: put the old name back
+  };
+
+  return (
+    <label style={{ display: 'block', marginTop: '10px' }}>
+      <span style={sectionLabelStyle}>{type === 'environment' ? 'Place name' : 'Name'}</span>
+      <input
+        type="text"
+        value={text}
+        maxLength={60}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') {
+            setText(name || '');
+            e.currentTarget.blur();
+          }
+        }}
+        style={nameInputStyle}
+      />
+    </label>
+  );
+}
+
 function formatFactor(factor) {
   if (factor >= 1) return `${factor.toFixed(2)}× bigger`;
   return `${(1 / factor).toFixed(2)}× smaller`;
@@ -230,6 +278,27 @@ const linkButtonStyle = {
   fontSize: '12px',
   cursor: 'pointer',
   padding: 0
+};
+
+const backButtonStyle = {
+  background: 'none',
+  border: 'none',
+  padding: 0,
+  color: BLUE,
+  fontSize: '13px',
+  fontWeight: 600,
+  cursor: 'pointer'
+};
+
+const nameInputStyle = {
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '8px 10px',
+  fontSize: '15px',
+  fontWeight: 600,
+  borderRadius: '8px',
+  border: `1px solid ${BORDER}`,
+  color: TEXT
 };
 
 const tipListStyle = { margin: '10px 0 0', paddingLeft: '18px', fontSize: '12px', color: MUTED, lineHeight: 1.8 };

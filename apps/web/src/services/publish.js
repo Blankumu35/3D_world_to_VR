@@ -26,11 +26,14 @@ export function normaliseRoomCode(text) {
 
 /**
  * Turns a saved { source, id } asset ref back into a URL the engine can
- * load. Only built-in library items for now; uploads and generated models
- * will resolve through the server once it stores them.
+ * load: built-in library items from the app's own files, generated models
+ * from the server (server/data/generated). Uploads aren't stored yet.
  */
 export function resolveAssetUrl(ref) {
   if (ref?.source === 'builtin') return getAssetById(ref.id)?.url ?? null;
+  if (ref?.source === 'generated' && /^[A-Za-z0-9_-]{1,64}$/.test(ref.id || '')) {
+    return `/api/generated/${ref.id}.glb`;
+  }
   return null;
 }
 

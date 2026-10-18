@@ -195,6 +195,9 @@ export class AppManager {
     this.onSelectionChange = callbacks.onSelectionChange || null;
     this.onTransformChange = callbacks.onTransformChange || null;
     this.onPlayerChange = callbacks.onPlayerChange || null;
+    // Called with listSceneItems() whenever something is added, removed,
+    // renamed or changes role, so the "Things" list stays in sync.
+    this.onEntitiesChange = callbacks.onEntitiesChange || null;
 
     // "Active player": character movement (below) drives this entity
     // instead of the free-look camera. playerView controls how the camera
@@ -301,6 +304,12 @@ export class AppManager {
    */
   setInteractionPromptHandler(fn) {
     this.onInteractionPromptChange = fn || null;
+  }
+
+  /** Same idea for the "Things" list: fn(items) on every change. */
+  setEntitiesChangeHandler(fn) {
+    this.onEntitiesChange = fn || null;
+    this.emitEntitiesChange();
   }
 
   init() {
@@ -479,6 +488,7 @@ export class AppManager {
       // it as the active player — step out of player mode first.
       this.activePlayerId = null;
       this.onPlayerChange?.(null);
+      this.emitEntitiesChange();
     }
     this.orbitTarget.copy(box.center);
     const radius = box.halfExtents.length();
@@ -803,6 +813,38 @@ export class AppManager {
   // 'first-person' stands inside it. Both are read by updateCamera().
   // ------------------------------------------------------------------
 
+  /**
+   * Everything in the world, in the order it was added, for the "Things"
+   * list: [{ id, name, type, source, isPlayer, interactable }]. `source`
+   * is 'builtin' | 'generated' | 'upload' ('upload' = can't be saved yet).
+   */
+  listSceneItems() {
+    return Array.from(this.entities.entries()).map(([id, r]) => ({
+      id,
+      name: r.name || id,
+      type: r.type === 'environment' ? 'environment' : 'object',
+      source: r.assetRef?.source || 'upload',
+      isPlayer: id === this.activePlayerId,
+      interactable: !!r.interactable
+    }));
+  }
+
+  emitEntitiesChange() {
+    this.onEntitiesChange?.(this.listSceneItems());
+  }
+
+  /** Gives a placed object or environment a new display name (saved with the world). */
+  renameEntity(assetId, name) {
+    const record = this.entities.get(assetId);
+    if (!record) return false;
+    const clean = String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (!clean || clean === record.name) return false;
+    record.name = clean;
+    this.emitTransform(assetId);
+    this.emitEntitiesChange();
+    return true;
+  }
+
   /** Objects (not environments) that can be picked as the active player. */
   listPlayableEntities() {
     return Array.from(this.entities.entries())
@@ -820,6 +862,7 @@ export class AppManager {
     this.activePlayerId = assetId;
     this.onPlayerChange?.(this.activePlayerId);
     this.updateCamera();
+    this.emitEntitiesChange();
     return true;
   }
 
@@ -833,6 +876,7 @@ export class AppManager {
     this.activePlayerId = null;
     this.onPlayerChange?.(null);
     this.updateCamera();
+    this.emitEntitiesChange();
   }
 
   /** @param {'normal'|'first-person'|'third-person'} mode */
@@ -1049,6 +1093,7 @@ export class AppManager {
     const record = this.entities.get(assetId);
     if (!record) return false;
     record.interactable = { label, action };
+    this.emitEntitiesChange();
     return true;
   }
 
@@ -1062,6 +1107,7 @@ export class AppManager {
     const record = this.entities.get(assetId);
     if (!record) return false;
     record.interactable = null;
+    this.emitEntitiesChange();
     return true;
   }
 
@@ -1326,6 +1372,8 @@ export class AppManager {
     const p = record.entity.getPosition();
     return {
       id: assetId,
+      name: record.name || assetId,
+      type: record.type === 'environment' ? 'environment' : 'object',
       position: [p.x, p.y, p.z],
       rotation: [...record.rotation],
       scaleLevel: record.scaleLevel,
@@ -1431,6 +1479,7 @@ export class AppManager {
     this.entities.delete(assetId);
     if (this.selectedId === assetId) this.selectEntity(null);
     if (this.activePlayerId === assetId) this.clearActivePlayer();
+    this.emitEntitiesChange();
     return true;
   }
 
@@ -1526,6 +1575,7 @@ export class AppManager {
         });
 
         if (exact) {
+          this.emitEntitiesChange();
           if (autoSelect) this.selectEntity(assetId);
           return resolve(entity);
         }
@@ -1538,6 +1588,7 @@ export class AppManager {
         // Only for placed objects — an environment is meant to surround
         // everything else, so "overlapping" is the normal case for it.
         if (type !== 'environment') this.resolveObjectOverlap(assetId);
+        this.emitEntitiesChange();
         if (autoSelect) this.selectEntity(assetId);
         resolve(entity);
       });
@@ -2058,6 +2109,7 @@ export class AppManager {
       if (this.entities.has(e.id)) loaded.set(e.id, this.entities.get(e.id));
     });
     this.entities = loaded;
+    this.emitEntitiesChange();
 
     results.forEach((r, i) => {
       if (r.status === 'rejected') {

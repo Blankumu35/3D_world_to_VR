@@ -10,6 +10,8 @@
     "server": "node --watch server/index.js"
   },
   "dependencies": {
+    "@gradio/client": "^2.7.1",
+    "@huggingface/inference": "^4.13.32",
     "@playcanvas/react": "^0.11.5",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
